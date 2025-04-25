@@ -2,12 +2,16 @@ import json
 import time
 from typing import List, Dict, Optional
 from botocore.exceptions import ClientError
-
+import sys
+import os 
+import boto3
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tools.client_utils import get_bedrock_runtime_client
 # --- RAG SYSTEM CLASSES ---
 
 class Retriever:
-    def __init__(self, agent_client, knowledge_base_id: str, number_of_results: int = 5):
-        self.agent_client = agent_client
+    def __init__(self, knowledge_base_id: str, number_of_results: int = 5):
+        self.agent_client = get_bedrock_runtime_client()
         self.knowledge_base_id = knowledge_base_id
         self.number_of_results = number_of_results
 
@@ -41,8 +45,8 @@ class PromptBuilder:
 
 
 class ConversationalModel:
-    def __init__(self, client, model_id: str, temperature: float = 0.5, top_k: int = 200):
-        self.client = client
+    def __init__(self,model_id: str, temperature: float = 0.5, top_k: int = 200):
+        self.client = get_bedrock_runtime_client()
         self.model_id = model_id
         self.temperature = temperature
         self.top_k = top_k
@@ -90,16 +94,12 @@ class RAGPipeline:
 # --- SAMPLE USAGE ---
 
 if __name__ == '__main__':
-    import streamlit as st
-    from utils import BEDROCK_CLIENT, BEDROCK_AGENT_CLIENT, KNOWLEDGE_BASE_ID
 
-    retriever = Retriever(BEDROCK_AGENT_CLIENT, KNOWLEDGE_BASE_ID)
-    model = ConversationalModel(BEDROCK_CLIENT, model_id="anthropic.claude-3-sonnet-20240229-v1:0")
+    retriever = Retriever("KNOWLEDGE_BASE_ID")
+    model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
     rag_pipeline = RAGPipeline(retriever, model)
 
-    st.title("RAG-powered Q&A")
-    user_query = st.text_input("Ask a question:")
-
+    user_query = "請給我"
     if user_query:
         answer = rag_pipeline.answer(user_query)
-        st.write("Answer:", answer)
+        print(answer)

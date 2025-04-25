@@ -1,8 +1,12 @@
 import boto3
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tools.client_utils import get_polly_client
 
 class Polly:
     def __init__(self):
-        self.client = boto3.client("polly")
+        self.client = get_polly_client("polly")
         self.defaults = {
             "Engine": "neural", # 此為最接近真人的引擎
             "LanguageCode": "cmn-CN",   # zh-TW 目前無支援台灣腔調 官網只有這大陸腔跟香港腔
