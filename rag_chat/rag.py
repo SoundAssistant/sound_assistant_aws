@@ -67,25 +67,31 @@ class PromptBuilder:
     @staticmethod
     def build_prompt(contexts: List[str], query: str) -> str:
         return f"""
-            Here is the context to reference:
-            <context>
-            {chr(10).join(contexts)}
-            </context>
+        以下是您需要參考的資料內容：
+        <context>
+        {chr(10).join(contexts)}
+        </context>
 
-            Referencing the context, answer the user question
-            <question>
-            {query}
-            </question>
-            """
+        根據上方資料，請回答以下問題（若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」）：
+        <question>
+        {query}
+        </question>
+        """
 
 class ConversationalModel:
-    def __init__(self, model_id: str, temperature: float = 0.5, top_k: int = 200):
+    def __init__(self, model_id: str, temperature: float = 0.0, top_k: int = 200):
         self.client = get_bedrock_runtime_client()
         self.model_id = model_id
         self.temperature = temperature
         self.top_k = top_k
         self.system_prompts = [
-            {"text": "You are a Question and Answering assistant. Answer based on provided context."}
+            {
+                "text": (
+                    "You are a strict question answering assistant. "
+                    "You must answer ONLY based on the provided <context>. "
+                    "If the context does not contain the answer, reply with: '根據目前的資料無法回答此問題。'"
+                )
+            }
         ]
 
     def converse(self, messages: List[Dict]) -> Dict:
