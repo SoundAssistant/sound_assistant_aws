@@ -6,6 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from rag_chat.rag import RAGPipeline , WebSearcher , ConversationalModel
 from rag_chat.chat import Chatbot
 from tts.tts import PollyTTS
+from cache_utils import get_cache
 
 def search_flow(query):
     web_searcher = WebSearcher(max_results=3, search_depth="advanced")
@@ -17,7 +18,7 @@ def search_flow(query):
         web_searcher=web_searcher,
         model=model
     )
-    answer = pipeline.answer("請給我最新的AWS重大新聞")
+    answer = pipeline.answer(query)
     tts_model = PollyTTS()
     tts_model.synthesize(answer, "./history_result/output_search.mp3")
     print(answer)
@@ -30,5 +31,10 @@ def chat_flow(query):
     print(response)
 
 if __name__ == "__main__":
-    search_flow("請給我最新的AWS重大新聞")
-    chat_flow("請給我最新的AWS重大新聞")
+    cache = get_cache()
+    cache.clear()
+    chat_flow("目前台積電的最新股價你記錄到哪天的")
+    cache.clear()
+    search_flow("目前台積電的最新股價你記錄到哪天的")
+    
+    

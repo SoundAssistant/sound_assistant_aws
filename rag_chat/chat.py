@@ -33,7 +33,7 @@ class Chatbot:
             contentType="application/json",
             accept="application/json"
         )
-
+        
         result = json.loads(response["body"].read())
         return result["content"][0]["text"]
 

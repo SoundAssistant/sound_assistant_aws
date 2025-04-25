@@ -21,16 +21,29 @@ class WebSearcher:
         api_key = api_key or os.getenv("TAVILY_API_KEY")
         if not api_key:
             raise ValueError("Please set the TAVILY_API_KEY environment variable")
-        self.client = TavilyClient(api_key)  
+        self.client = TavilyClient(api_key)
         self.max_results = max_results
         self.search_depth = search_depth
 
     def get_context(self, query: str) -> str:
-        return self.client.get_search_context(
+        raw_result = self.client.get_search_context(
             query=query,
             max_results=self.max_results,
             search_depth=self.search_depth
         )
+
+        try:
+            # 將 JSON 字串轉換成 list[dict]
+            result = json.loads(raw_result)
+            # 將每筆結果的內容與來源網址組合起來
+            formatted_contexts = [
+                f"{item['content']}\n來源：{item['url']}" for item in result
+                if 'content' in item and 'url' in item
+            ]
+            return "\n\n".join(formatted_contexts)
+        except Exception as e:
+            print("Error parsing Tavily search result:", e)
+            return "無法解析搜尋結果。"
 
 class Retriever:
     def __init__(self, knowledge_base_id: str, number_of_results: int = 5):
@@ -101,7 +114,7 @@ class RAGPipeline:
         # vector_ctxs = self.retriever.retrieve(query)  # 目前因為沒有kb所以先不用
         # all_ctx = [web_ctx] + vector_ctxs  # 目前因為沒有kb所以先不用
         all_ctx = [web_ctx]  # 僅使用 web context
-
+        print(all_ctx)
         prompt = PromptBuilder.build_prompt(all_ctx, query)
         user_msg = {"role": "user", "content": [{"text": prompt}]}
         self.messages.append(user_msg)
@@ -128,6 +141,6 @@ if __name__ == "__main__":
         web_searcher=web_searcher,
         model=model
     )
-    answer = pipeline.answer("請給我最新的AWS重大新聞")
+    answer = pipeline.answer("請給我最新的AWS重大新聞 並告訴我這是哪天的")
     print(answer)
 

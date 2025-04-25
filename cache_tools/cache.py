@@ -97,6 +97,10 @@ class InMemorySemanticCache:
 
         if success:
             self.session_log.clear()
+    
+    def clear(self):
+        self.session_log.clear()
+    
 
 
 def dummy_generator(query: str) -> str:
