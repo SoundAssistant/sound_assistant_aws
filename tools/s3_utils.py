@@ -1,8 +1,9 @@
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from client_utils import get_s3_client
 
 
-s3 = boto3.client("s3")
+s3 = get_s3_client('s3')
 
 
 def upload_file_to_s3(local_path: str, bucket: str, key: str) -> bool:
