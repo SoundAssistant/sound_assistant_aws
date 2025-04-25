@@ -4,11 +4,11 @@ class Polly:
     def __init__(self):
         self.client = boto3.client("polly")
         self.defaults = {
-            "Engine": "neural",
+            "Engine": "neural", # 此為最接近真人的引擎
             "LanguageCode": "cmn-CN",   # zh-TW 目前無支援台灣腔調 官網只有這大陸腔跟香港腔
             "VoiceId": "Zhiyu",        #TianTian
             "OutputFormat": "mp3",
-            "SampleRate": "16000",
+            "SampleRate": "16000", #這個參數是紀錄每秒紀錄多少個音點 越高品質越好 
         }
 
     def synthesize(self, text, output_filename):
@@ -23,4 +23,4 @@ class Polly:
 # example
 if __name__ == "__main__":
     polly = Polly()
-    polly.synthesize("哈囉 我們是我要進外商", "./result/output.mp3")
+    polly.synthesize("哈囉 我們是我要進外商", "./history_result/output.mp3")
