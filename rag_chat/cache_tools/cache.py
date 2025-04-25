@@ -7,6 +7,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from tools.s3_utils import upload_file_to_s3
+from tools.client_utils import get_bedrock_client,get_bedrock_runtime_client
 
 
 def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
@@ -36,8 +37,7 @@ class InMemorySemanticCache:
         self.session_log: List[Tuple[str, str]] = []
 
         self.model_id = "amazon.titan-embed-text-v2:0"
-        self.bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
-        self.s3 = boto3.client("s3")  
+        self.bedrock = get_bedrock_runtime_client("bedrock-runtime", region_name="us-east-1")
 
     def get_embedding(self, text: str) -> np.ndarray:
         body = {"inputText": text}
