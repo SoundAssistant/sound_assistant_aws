@@ -9,7 +9,7 @@ from tts.tts import PollyTTS
 from cache_utils import get_cache
 
 def search_flow(query):
-    web_searcher = WebSearcher(max_results=3, search_depth="advanced")
+    web_searcher = WebSearcher(max_results=3, search_depth="advanced",use_top_only=True )
     # retriever = Retriever("YOUR_KB_ID", number_of_results=3)  
     model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
 

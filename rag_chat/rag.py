@@ -14,9 +14,9 @@ from tools.cache_utils import get_cache
 class WebSearcher:
     def __init__(self,
                  api_key: str = None,
-                 max_results: int = 5,
-                 search_depth: str = "basic"):
-        
+                 max_results: int = 3,
+                 search_depth: str = "basic",
+                 use_top_only: bool = False): 
         load_dotenv()
         api_key = api_key or os.getenv("TAVILY_API_KEY")
         if not api_key:
@@ -24,6 +24,7 @@ class WebSearcher:
         self.client = TavilyClient(api_key)
         self.max_results = max_results
         self.search_depth = search_depth
+        self.use_top_only = use_top_only 
 
     def get_context(self, query: str) -> str:
         raw_result = self.client.get_search_context(
@@ -31,19 +32,21 @@ class WebSearcher:
             max_results=self.max_results,
             search_depth=self.search_depth
         )
-
         try:
-            # 將 JSON 字串轉換成 list[dict]
             result = json.loads(raw_result)
-            # 將每筆結果的內容與來源網址組合起來
+
+            if self.use_top_only:
+                result = result[:1]  
+
             formatted_contexts = [
-                f"{item['content']}\n來源：{item['url']}" for item in result
+                f"資料來自：{item['url']}\n{item['content']}" for item in result
                 if 'content' in item and 'url' in item
             ]
             return "\n\n".join(formatted_contexts)
         except Exception as e:
             print("Error parsing Tavily search result:", e)
             return "無法解析搜尋結果。"
+
 
 class Retriever:
     def __init__(self, knowledge_base_id: str, number_of_results: int = 5):
@@ -72,14 +75,18 @@ class PromptBuilder:
         {chr(10).join(contexts)}
         </context>
 
-        根據上方資料，請回答以下問題（請優先使用資料中**更新時間最新的資訊**，若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」）：
+        根據上方資料，請回答以下問題：
         <question>
         {query}
         </question>
+
+        如果您使用了某個資料來作答，請務必在回答最後加上：
+        【資料來源】：對應的網址（若有多個可列多個）
+        若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」。
         """
 
 class ConversationalModel:
-    def __init__(self, model_id: str, temperature: float = 0.2, top_k: int = 200):
+    def __init__(self, model_id: str, temperature: float = 0.1, top_k: int = 200):
         self.client = get_bedrock_runtime_client()
         self.model_id = model_id
         self.temperature = temperature
@@ -120,7 +127,6 @@ class RAGPipeline:
         # vector_ctxs = self.retriever.retrieve(query)  # 目前因為沒有kb所以先不用
         # all_ctx = [web_ctx] + vector_ctxs  # 目前因為沒有kb所以先不用
         all_ctx = [web_ctx]  # 僅使用 web context
-        print(all_ctx)
         prompt = PromptBuilder.build_prompt(all_ctx, query)
         user_msg = {"role": "user", "content": [{"text": prompt}]}
         self.messages.append(user_msg)
@@ -138,7 +144,7 @@ class RAGPipeline:
                 time.sleep(delay * (2 ** attempt))
 
 if __name__ == "__main__":
-    web_searcher = WebSearcher(max_results=3, search_depth="advanced")
+    web_searcher = WebSearcher(max_results=3, search_depth="advanced",use_top_only=True )
     # retriever = Retriever("YOUR_KB_ID", number_of_results=3)  
     model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
 
