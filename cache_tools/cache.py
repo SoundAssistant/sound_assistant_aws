@@ -37,7 +37,7 @@ class InMemorySemanticCache:
         self.session_log: List[Tuple[str, str]] = []
 
         self.model_id = "amazon.titan-embed-text-v2:0"
-        self.bedrock = get_bedrock_runtime_client("bedrock-runtime", region_name="us-east-1")
+        self.bedrock = get_bedrock_runtime_client("bedrock-runtime")
 
     def get_embedding(self, text: str) -> np.ndarray:
         body = {"inputText": text}

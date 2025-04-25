@@ -1,6 +1,9 @@
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from client_utils import get_s3_client
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tools.client_utils import get_s3_client
 
 
 s3 = get_s3_client('s3')

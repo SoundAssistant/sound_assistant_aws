@@ -1,30 +1,56 @@
-from cache_tools import cache
-import rag as rag
+import sys 
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tools.cache_utils import get_cache
 from botocore.exceptions import ClientError
 import boto3
 import pandas as pd
+import json
 
 class Chatbot:
-    def __init__(self, model_id: str, s3_bucket: str, s3_key_prefix: str = ""):
+    def __init__(self, model_id: str):
         self.model_id = model_id
-        self.s3_bucket = s3_bucket
-        self.s3_key_prefix = s3_key_prefix
         self.bedrock = boto3.client("bedrock-runtime")
-        self.cache = cache.InMemorySemanticCache()
-        self.rag = rag.RAG(self.bedrock, self.model_id)
+        self.cache = get_cache()
+
+    def generate_response(self, query: str) -> str:
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": query}
+                    ]
+                }
+            ]
+        }
+
+        response = self.bedrock.invoke_model(
+            modelId=self.model_id,
+            body=json.dumps(body),
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        result = json.loads(response["body"].read())
+        return result["content"][0]["text"]
 
     def chat(self, query: str) -> str:
         try:
+            # 從 cache 拿，如果沒有就用 generate_response 並加進 cache
             response = self.cache.get_or_generate_response(
-                query, lambda q: self.rag.generate_response(q)
+                query, self.generate_response
             )
             return response
         except ClientError as e:
-            print(f"❌ Bedrock API 請求失敗: {e}")
-            return "抱歉，我目前無法回答您的問題。請稍後再試。"
+            print(f"API ERROR: {e}")
+            return "目前伺服器有問題，請稍後再試。"
 
-    def save_session_to_s3(self, filename_prefix: str):
-        self.cache.save_session_to_txt_and_upload(
-            filename_prefix, self.s3_bucket, self.s3_key_prefix
-        )
-        print(f"✅ 保存会话到 S3: s3://{self.s3_bucket}/{self.s3_key_prefix}")
+        
+if __name__ == "__main__":
+
+    chat_model = Chatbot("anthropic.claude-3-haiku-20240307-v1:0")
+    answer = chat_model.chat("請給我最新的AWS重大新聞")
+    print(answer)

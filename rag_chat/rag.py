@@ -7,9 +7,9 @@ import sys
 import boto3
 from tavily import TavilyClient  
 from dotenv import load_dotenv
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from tools.client_utils import get_bedrock_runtime_client
+from tools.cache_utils import get_cache
 
 class WebSearcher:
     def __init__(self,
@@ -94,6 +94,7 @@ class RAGPipeline:
         self.web_searcher = web_searcher
         self.model = model
         self.messages: List[Dict] = []
+        self.cache = get_cache()
 
     def answer(self, query: str) -> str:
         web_ctx = self.web_searcher.get_context(query)
@@ -110,6 +111,7 @@ class RAGPipeline:
             try:
                 resp = self.model.converse(self.messages)
                 self.messages.append(resp)
+                self.cache.add_to_cache(query, resp['content'][0]['text'])
                 return resp['content'][0]['text']
             except ClientError as e:
                 if attempt == max_retries - 1:
@@ -118,11 +120,11 @@ class RAGPipeline:
 
 if __name__ == "__main__":
     web_searcher = WebSearcher(max_results=3, search_depth="advanced")
-    # retriever = Retriever("YOUR_KB_ID", number_of_results=3)  # 暫時不使用
+    # retriever = Retriever("YOUR_KB_ID", number_of_results=3)  
     model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
 
     pipeline = RAGPipeline(
-        # retriever=retriever,  # 暫時不使用
+        # retriever=retriever,  
         web_searcher=web_searcher,
         model=model
     )
