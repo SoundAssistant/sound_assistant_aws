@@ -72,14 +72,14 @@ class PromptBuilder:
         {chr(10).join(contexts)}
         </context>
 
-        根據上方資料，請回答以下問題（若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」）：
+        根據上方資料，請回答以下問題（請優先使用資料中**更新時間最新的資訊**，若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」）：
         <question>
         {query}
         </question>
         """
 
 class ConversationalModel:
-    def __init__(self, model_id: str, temperature: float = 0.0, top_k: int = 200):
+    def __init__(self, model_id: str, temperature: float = 0.2, top_k: int = 200):
         self.client = get_bedrock_runtime_client()
         self.model_id = model_id
         self.temperature = temperature

@@ -33,8 +33,8 @@ def chat_flow(query):
 if __name__ == "__main__":
     cache = get_cache()
     cache.clear()
-    chat_flow("目前台積電的最新股價你記錄到哪天的")
+    chat_flow("目前台積電的最新股價為多少")
     cache.clear()
-    search_flow("目前台積電的最新股價你記錄到哪天的")
+    search_flow("目前台積電的最新股價為多少")
     
     
