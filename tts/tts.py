@@ -1,0 +1,26 @@
+import boto3
+
+class Polly:
+    def __init__(self):
+        self.client = boto3.client("polly")
+        self.defaults = {
+            "Engine": "neural",
+            "LanguageCode": "cmn-CN",   # zh-TW 目前無支援台灣腔調 官網只有這大陸腔跟香港腔
+            "VoiceId": "Zhiyu",        #TianTian
+            "OutputFormat": "mp3",
+            "SampleRate": "16000",
+        }
+
+    def synthesize(self, text, output_filename):
+        params = {**self.defaults, "Text": text}
+        response = self.client.synthesize_speech(**params)
+
+        with open(output_filename, "wb") as file:
+            file.write(response["AudioStream"].read())
+
+        print(f"{output_filename} saved successfully.")
+
+# example
+if __name__ == "__main__":
+    polly = Polly()
+    polly.synthesize("哈囉 我們是我要進外商", "./result/output.mp3")
