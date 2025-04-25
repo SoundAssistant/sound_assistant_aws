@@ -1,3 +1,6 @@
 *.ipynb
+*.env
 agent.py
 knowledge_base.py
+.gitignore
+.gitignore
