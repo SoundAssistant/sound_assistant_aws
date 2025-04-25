@@ -4,7 +4,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from tools.client_utils import get_polly_client
 
-class Polly:
+class PollyTTS:
     def __init__(self):
         self.client = get_polly_client("polly")
         self.defaults = {
@@ -26,5 +26,5 @@ class Polly:
 
 # example
 if __name__ == "__main__":
-    polly = Polly()
+    polly = PollyTTS()
     polly.synthesize("哈囉 我們是我要進外商", "./history_result/output.mp3")
