@@ -8,6 +8,8 @@ import tempfile
 import subprocess
 from pathlib import Path
 from flask import Flask, render_template_string, send_from_directory, url_for
+from urllib.parse import urljoin
+from flask import request
 from flask_socketio import SocketIO
 from tools.retry_utils import retry_sync
 from rag_chat.rag import RAGPipeline, WebSearcher, ConversationalModel
@@ -24,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static")
-app.config['SERVER_NAME'] = 'localhost:5000'
+app.config['SERVER_NAME'] = '0747-34-222-37-198.ngrok-free.app'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 current_task = None
@@ -350,7 +352,7 @@ socket.on('expression', (path) => {
 socket.on('audio_url', (url) => {
   expr.src = '/static/animations/speaking.gif';
   player.pause();
-  player.src = url;
+  player.src = url;   // 👈 直接用，不要自己亂補 window.location.href 或 urljoin 了
   player.load();
   player.play().catch(err => console.error("❌ 播放失敗", err));
   player.onended = () => {
@@ -360,8 +362,8 @@ socket.on('audio_url', (url) => {
       socket.emit('delete_audio', filename);
     }
   };
-
 });
+
 
 socket.on('status', (msg) => {
   status.innerText = msg;
@@ -496,11 +498,19 @@ async def handle_text(text: str):
 
         if audio_path and Path(audio_path).exists():
             logger.info(f"[handle_text] 音檔生成完成：{audio_path}")
-            # ⭐ 在這裡補上 app context
             with app.app_context():
-                audio_url = url_for('get_audio', filename=os.path.basename(audio_path))
+                server_name = app.config.get('SERVER_NAME', 'localhost:5000')
+                if not server_name.startswith('http'):
+                    server_name = f"https://{server_name}"
+
+                relative_path = f"/history_result/{os.path.basename(audio_path)}"  # ⭐自己組
+                audio_url = f"{server_name}{relative_path}"                       # ⭐直接拼
+                # （這時不用再replace了！）
+
             socketio.emit('expression', '/static/animations/speaking.gif')
             socketio.emit('audio_url', audio_url)
+
+
 
         socketio.emit('status', '✅ 已完成。')
 
@@ -509,6 +519,7 @@ async def handle_text(text: str):
         raise
     except Exception as e:
         logger.error(f"[handle_text] 發生錯誤：{e}")
+
 
 
 async def cancellable_socket_handle_text(text: str):
