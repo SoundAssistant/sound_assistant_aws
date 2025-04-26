@@ -75,14 +75,19 @@ class PromptBuilder:
         {chr(10).join(contexts)}
         </context>
 
-        根據上方資料，請回答以下問題：
+        根據上方資料，請以「摘要」的形式回答以下問題：
         <question>
         {query}
         </question>
 
-        如果無法從資料中得到答案，請明確回答：「根據目前的資料無法回答此問題。」。
-        請直接回答內容，不需要列出資料來源。
+        回答要求：
+        - 請以 50 到 130 字之間總結回答
+        - 不要逐字抄寫內容，要用自己的話整理重點
+        - 如果資料不足，請回答：「根據目前的資料無法回答此問題。」
+        - 不要附上資料來源或連結
+        - 使用簡明扼要、直接了當的中文回答
         """
+
 
 class ConversationalModel:
     def __init__(self, model_id: str, temperature: float = 0.1, top_k: int = 200):
@@ -95,11 +100,15 @@ class ConversationalModel:
                 "text": (
                     "You are a strict question answering assistant. "
                     "You must answer ONLY based on the provided <context>. "
+                    "Summarize the answer concisely in 50 to 130 words. "
                     "If the context does not contain the answer, reply with: '根據目前的資料無法回答此問題。' "
+                    "Do not copy long sentences from the context directly. "
                     "Please DO NOT include any source links or citations in your answer."
                 )
             }
         ]
+
+
 
 
     def converse(self, messages: List[Dict]) -> Dict:

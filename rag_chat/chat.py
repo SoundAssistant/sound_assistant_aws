@@ -18,13 +18,14 @@ class Chatbot:
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 1024,
             "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": query}
-                    ]
-                }
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"請以不超過 80 字的方式回答以下問題：{query}"}
             ]
+        }
+    ]
+
         }
 
         response = self.bedrock.invoke_model(
