@@ -18,12 +18,21 @@ class TranscribeHandler(TranscriptResultStreamHandler):
                         await self.final_transcripts.put(text)
 
 class LiveTranscriber:
-    def __init__(self, region="us-west-2", callback=None, silence_timeout=2.0):
+    def __init__(self, region="us-west-2", callback=None, silence_timeout=5.0):
         self.client = TranscribeStreamingClient(region=region)
         self.callback = callback
         self.silence_timeout = silence_timeout  # ✅ 停頓幾秒觸發送出
         self.buffer = []  # ✅ 暫存文字
         self.timer_task = None  # ✅ 計時器 task
+    def is_valid_text(self, text: str) -> bool:
+        text = text.strip()
+        if not text:
+            return False  # 空的不要
+        if len(text) < 2:
+            return False  # 太短的不要（像 "嗯"）
+        if all(c in "，。？！、,.?! " for c in text):
+            return False  # 全是標點符號的不要
+        return True
 
     async def mic_stream(self):
         loop = asyncio.get_event_loop()
@@ -67,7 +76,13 @@ class LiveTranscriber:
         try:
             while True:
                 text = await handler.final_transcripts.get()
+                # ✅ 簡單噪音判斷
+                if not self.is_valid_text(text):
+                    print(f"⚡ 濾掉無效文字：'{text}'")
+                    return  # 無效的就直接忽略，不加入 buffer
+
                 print(f"📝 偵測到新文字：{text}")
+                self.buffer.append(text)
 
                 self.buffer.append(text)  # ✅ 暫存文字
 

@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import os
-
+import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from rag_chat.rag import RAGPipeline, WebSearcher, ConversationalModel
@@ -19,7 +19,8 @@ def search_flow(query: str):
     answer = pipeline.answer(query)
     
     tts_model = PollyTTS()
-    tts_model.synthesize(answer, "./history_result/output_search.mp3")
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    tts_model.synthesize(answer, f"./history_result/output_search_{timestamp}.mp3")
     print(f"🔎 搜尋結果：{answer}")
 
 def chat_flow(query: str):
@@ -27,7 +28,8 @@ def chat_flow(query: str):
     response = chat_model.chat(query)
 
     tts_model = PollyTTS()
-    tts_model.synthesize(response, "./history_result/output_chat.mp3")
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    tts_model.synthesize(response, f"./history_result/output_chat_{timestamp}.mp3")
     print(f"💬 聊天回應：{response}")
 
 def task_flow(query: str) -> str:
