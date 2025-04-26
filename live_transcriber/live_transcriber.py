@@ -8,8 +8,7 @@ from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent
 
 # 初始化 Bedrock 客戶端（請先在環境變數或 AWS config 設定好憑證）
-_bedrock = boto3.client("bedrock")
-
+_bedrock = boto3.client("bedrock-runtime", region_name="us-west-2")
 # Bedrock 分類 Prompt，回傳：START / STOP / INTERRUPT / COMMAND
 _CLASSIFY_PROMPT = """
 請判斷下列文字的意圖，僅回傳這四種之一（且僅該關鍵字）：
@@ -35,7 +34,7 @@ class TranscribeHandler(TranscriptResultStreamHandler):
                         await self.final_transcripts.put(t)
 
 class LiveTranscriber:
-    def __init__(self, region="us-west-2", callback=None, silence_timeout=6.0):
+    def __init__(self, region="us-west-2", callback=None, silence_timeout=2.0):
         self.client = TranscribeStreamingClient(region=region)
         self.callback = callback                # 傳入 main.py 的 handle_text
         self.silence_timeout = silence_timeout  # 停頓秒數
@@ -77,7 +76,7 @@ class LiveTranscriber:
     def _cancel_current(self):
         """中斷目前 callback"""
         if self.current_task and not self.current_task.done():
-            print("⚡ 中斷先前指令")
+            print("中斷先前指令")
             self.current_task.cancel()
             self.current_task = None
 
@@ -92,12 +91,12 @@ class LiveTranscriber:
             self.write_chunks(stream),
             handler.handle_events()
         )
-        print("🔊 系統等待啟動詞...")
+        print("系統等待啟動詞...")
 
         try:
             while True:
                 text = await handler.final_transcripts.get()
-                print("📝 收到：", text)
+                print("收到：", text)
                 self.buffer.append(text)
 
                 if self.timer_task:
@@ -125,7 +124,7 @@ class LiveTranscriber:
 
         # 1. 先分類意圖
         intent = await self.classify_intent(text)
-        print("🔍 分類結果：", intent)
+        print("分類結果：", intent)
 
         # 2. START：進入啟動模式
         if intent == "START":
@@ -136,19 +135,19 @@ class LiveTranscriber:
         # 3. STOP：退出啟動模式並中斷指令
         if intent == "STOP":
             self.active = False
-            print("🛑 停止所有動作")
+            print("停止所有動作")
             self._cancel_current()
             return
 
         # 4. INTERRUPT：中斷上一次 callback（保持 active）
         if intent == "INTERRUPT" and self.active:
             self._cancel_current()
-            print("🔄 已中斷並等待新命令")
+            print("已中斷並等待新命令")
             return
 
         # 5. COMMAND：一般命令，在 active 狀態下才執行
         if intent == "COMMAND" and self.active:
-            print("✅ 執行命令：", text)
+            print("執行命令：", text)
             self._cancel_current()
             # asyncio.create_task 回傳一個 Task，未完成前可中斷
             self.current_task = asyncio.create_task(self.callback(text))
