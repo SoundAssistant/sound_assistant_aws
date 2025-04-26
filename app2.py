@@ -189,6 +189,7 @@ let recordingStartTime = null;
 let silenceStart = null;
 let weakNoiseStart = null;
 let backgroundVolumes = [];
+let hasRecordedOnce = false; 
 
 const baseThreshold = 0.08;             // 基本啟動門檻
 let dynamicThreshold = baseThreshold;    // 動態啟動門檻
@@ -225,6 +226,7 @@ async function prepareMicrophone() {
   });
 
   mediaRecorder.addEventListener('stop', async () => {
+    hasRecordedOnce = true;
     if (audioChunks.length > 0) {
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
       audioChunks = [];
@@ -251,7 +253,14 @@ function startListening() {
   backgroundVolumes = [];
   audioChunks = [];
   status.innerText = '👂 正在靜音監聽中...';
-  expr.src = '/static/animations/thinking.gif';
+  
+  // ⭐ 重點：第一次用 wakeup.svg，以後用 thinking.gif
+  if (!hasRecordedOnce) {
+    expr.src = '/static/animations/wakeup.svg';
+  } else {
+    expr.src = '/static/animations/thinking.gif';
+  }
+
   monitorVolume();
 }
 
@@ -344,7 +353,12 @@ socket.on('audio_url', (url) => {
   player.play().catch(err => console.error("❌ 播放失敗", err));
   player.onended = () => {
     expr.src = '/static/animations/idle.gif';
+    if (player.src.includes("/history_result/")) {
+      const filename = player.src.split("/history_result/")[1];
+      socket.emit('delete_audio', filename);
+    }
   };
+
 });
 
 socket.on('status', (msg) => {
@@ -373,7 +387,16 @@ socket.on('text_response', (text) => {
 </html>
 
 '''
-
+@socketio.on('delete_audio')
+def delete_audio(filename):
+    try:
+        path = os.path.join('history_result', filename)
+        if os.path.exists(path):
+            os.remove(path)
+            logger.info(f"[delete_audio] 已刪除檔案：{path}")
+    except Exception as e:
+        logger.error(f"[delete_audio] 刪除檔案失敗：{e}")
+        
 # --- 音訊處理 ---
 @socketio.on('audio_blob')
 def handle_audio_blob(base64_audio):
