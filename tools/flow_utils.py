@@ -7,6 +7,8 @@ from rag_chat.rag import RAGPipeline , WebSearcher , ConversationalModel
 from rag_chat.chat import Chatbot
 from tts.tts import PollyTTS
 from cache_utils import get_cache
+from task_classification.task_classification import TaskClassifier
+
 
 def search_flow(query):
     web_searcher = WebSearcher(max_results=3, search_depth="advanced",use_top_only=True )
