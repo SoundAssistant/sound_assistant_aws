@@ -170,138 +170,204 @@ HTML = '''
 </div>
 
 <script>
-  const socket = io();
-  const expr = document.getElementById('expression');
-  const status = document.getElementById('status');
-  const volumeFill = document.getElementById('volume_fill');
-  const player = document.getElementById('player');
-  const chatLog = document.getElementById('chat_log');
-  const clickLayer = document.getElementById('click_to_start');
+const socket = io();
+const expr = document.getElementById('expression');
+const status = document.getElementById('status');
+const volumeFill = document.getElementById('volume_fill');
+const player = document.getElementById('player');
+const chatLog = document.getElementById('chat_log');
+const clickLayer = document.getElementById('click_to_start');
 
-  let latestUserQuery = null;
-  let mediaRecorder;
-  let audioChunks = [];
-  let audioContext;
-  let analyser;
-  let silenceStart = null;
-  const silenceThreshold = 0.02;  // 音量小於這個就視為無聲
-  const silenceDelay = 3000;       // 3秒無聲就判斷停止
+let latestUserQuery = null;
+let mediaRecorder;
+let audioChunks = [];
+let audioContext;
+let analyser;
+let stream;
+let isRecording = false;
+let recordingStartTime = null;
+let silenceStart = null;
+let weakNoiseStart = null;
+let backgroundVolumes = [];
 
-  window.onload = () => {
-    clickLayer.addEventListener('click', async () => {
-      try {
-        await startRecording();
-        clickLayer.style.display = 'none';
-      } catch (err) {
-        console.error('⚠️ 無法啟動錄音：', err);
-        status.innerText = '❌ 無法啟動錄音';
-      }
-    });
-  };
+const baseThreshold = 0.08;             // 基本啟動門檻
+let dynamicThreshold = baseThreshold;    // 動態啟動門檻
+const silenceThreshold = 0.02;           // 判定無聲
+const silenceDelay = 2000;               // 錄音中無聲多久停止錄音（毫秒）
+const maxRecordingTime = 12000;           // 錄音最大時長（毫秒）
+const weakNoiseIgnoreTime = 3000;         // 小聲雜訊超過多久忽略（毫秒）
 
-  async function startRecording() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
+window.onload = () => {
+  clickLayer.addEventListener('click', async () => {
+    try {
+      await prepareMicrophone();
+      clickLayer.style.display = 'none';
+    } catch (err) {
+      console.error('⚠️ 無法啟動錄音：', err);
+      status.innerText = '❌ 無法啟動錄音';
+    }
+  });
+};
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioContext.createMediaStreamSource(stream);
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
+async function prepareMicrophone() {
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaRecorder = new MediaRecorder(stream);
+  audioChunks = [];
 
-    mediaRecorder.addEventListener('dataavailable', event => {
-      audioChunks.push(event.data);
-    });
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioContext.createMediaStreamSource(stream);
+  analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
 
-    mediaRecorder.addEventListener('stop', async () => {
-      if (audioChunks.length > 0) {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        audioChunks = [];
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64Audio = reader.result.split(',')[1];
-          socket.emit('audio_blob', base64Audio);
-          status.innerText = '📨 上傳音訊中...';
-        };
-        reader.readAsDataURL(audioBlob);
-      }
-      if (audioContext) {
-        audioContext.close();
-      }
-      setTimeout(startRecording, 1000); // 錄完後隔1秒再開始新一段
-    });
+  mediaRecorder.addEventListener('dataavailable', event => {
+    audioChunks.push(event.data);
+  });
 
-    mediaRecorder.start();
-    status.innerText = '🎤 錄音中...';
+  mediaRecorder.addEventListener('stop', async () => {
+    if (audioChunks.length > 0) {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      audioChunks = [];
 
-    silenceStart = Date.now();
-    monitorSilence();
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Audio = reader.result.split(',')[1];
+        socket.emit('audio_blob', base64Audio);
+        status.innerText = '📨 上傳音訊中...';
+      };
+      reader.readAsDataURL(audioBlob);
+    }
+    setTimeout(startListening, 500);
+  });
+
+  startListening();
+}
+
+function startListening() {
+  isRecording = false;
+  recordingStartTime = null;
+  silenceStart = null;
+  weakNoiseStart = null;
+  backgroundVolumes = [];
+  audioChunks = [];
+  status.innerText = '👂 正在靜音監聽中...';
+  expr.src = '/static/animations/thinking.gif';
+  monitorVolume();
+}
+
+function monitorVolume() {
+  const dataArray = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(dataArray);
+
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) {
+    const normalized = (dataArray[i] - 128) / 128;
+    sum += normalized * normalized;
+  }
+  const volume = Math.sqrt(sum / dataArray.length);
+
+  // 更新音量條
+  const volumePercentage = Math.min(100, Math.floor(volume * 300));
+  volumeFill.style.width = volumePercentage + '%';
+
+  const now = Date.now();
+
+  // --- 背景音量統計 (只在待機時做) ---
+  if (!isRecording) {
+    backgroundVolumes.push(volume);
+    if (backgroundVolumes.length > 100) backgroundVolumes.shift();
+
+    const avgBackground = backgroundVolumes.reduce((a, b) => a + b, 0) / backgroundVolumes.length;
+    if (avgBackground > 0.05) {
+      dynamicThreshold = Math.min(0.15, baseThreshold + (avgBackground - 0.05));
+    } else {
+      dynamicThreshold = baseThreshold;
+    }
   }
 
-  function monitorSilence() {
-    const dataArray = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(dataArray);
-
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      const normalized = (dataArray[i] - 128) / 128;
-      sum += normalized * normalized;
+  // --- 小聲雜訊忽略 ---
+  if (!isRecording) {
+    if (volume > silenceThreshold && volume < dynamicThreshold) {
+      if (!weakNoiseStart) weakNoiseStart = now;
+      if (now - weakNoiseStart > weakNoiseIgnoreTime) {
+        console.log('💤 小聲雜訊超過3秒，忽略');
+        weakNoiseStart = null;
+        backgroundVolumes = [];
+      }
+    } else {
+      weakNoiseStart = null;
     }
-    const volume = Math.sqrt(sum / dataArray.length);
-    
-    // 更新音量條
-    const volumePercentage = Math.min(100, Math.floor(volume * 300)); // 放大音量變化
-    volumeFill.style.width = volumePercentage + '%';
+  }
 
+  // --- 錄音邏輯 ---
+  if (!isRecording) {
+    if (volume > dynamicThreshold) {
+      console.log('🎙️ 偵測到說話，開始錄音！');
+      mediaRecorder.start();
+      recordingStartTime = now;
+      silenceStart = null;
+      isRecording = true;
+      status.innerText = '🎤 錄音中...';
+      expr.src = '/static/animations/thinking.gif';
+    }
+  } else {
     if (volume > silenceThreshold) {
-      silenceStart = Date.now(); // 有聲音，更新最後發聲時間
+      silenceStart = null;
+    } else {
+      if (!silenceStart) silenceStart = now;
+      if (now - silenceStart > silenceDelay) {
+        console.log('🛑 錄音中偵測到靜音超過2秒，停止錄音');
+        mediaRecorder.stop();
+        return;
+      }
     }
-
-    if (Date.now() - silenceStart > silenceDelay) {
-      console.log('🛑 無聲超過3秒，自動停止錄音');
+    if (now - recordingStartTime > maxRecordingTime) {
+      console.log('⏰ 錄音超過12秒，強制停止');
       mediaRecorder.stop();
       return;
     }
-
-    requestAnimationFrame(monitorSilence);
   }
 
-  socket.on('expression', (path) => {
-    expr.src = path;
-  });
+  requestAnimationFrame(monitorVolume);
+}
 
-  socket.on('audio_url', (url) => {
-    expr.src = '/static/animations/speaking.gif';
-    player.pause();
-    player.src = url;
-    player.load();
-    player.play().catch(err => console.error("❌ 播放失敗", err));
+// --- 處理 server 回傳訊息 ---
+socket.on('expression', (path) => {
+  expr.src = path;
+});
 
-    player.onended = () => {
-      expr.src = '/static/animations/idle.gif';
-    };
-  });
+socket.on('audio_url', (url) => {
+  expr.src = '/static/animations/speaking.gif';
+  player.pause();
+  player.src = url;
+  player.load();
+  player.play().catch(err => console.error("❌ 播放失敗", err));
+  player.onended = () => {
+    expr.src = '/static/animations/idle.gif';
+  };
+});
 
-  socket.on('status', (msg) => {
-    status.innerText = msg;
-  });
+socket.on('status', (msg) => {
+  status.innerText = msg;
+});
 
-  socket.on('user_query', (text) => {
-    latestUserQuery = text;
-  });
+socket.on('user_query', (text) => {
+  latestUserQuery = text;
+});
 
-  socket.on('text_response', (text) => {
-    const entry = document.createElement('div');
-    entry.className = 'chat_entry';
-    entry.innerHTML = `
-      <div class="user_query">🧑 ${latestUserQuery || ''}</div>
-      <div class="bot_response">🤖 ${text}</div>
-    `;
-    chatLog.appendChild(entry);
-    chatLog.scrollTop = chatLog.scrollHeight;
-  });
+socket.on('text_response', (text) => {
+  const entry = document.createElement('div');
+  entry.className = 'chat_entry';
+  entry.innerHTML = `
+    <div class="user_query">🧑 ${latestUserQuery || ''}</div>
+    <div class="bot_response">🤖 ${text}</div>
+  `;
+  chatLog.appendChild(entry);
+  chatLog.scrollTop = chatLog.scrollHeight;
+});
 </script>
+
+
 
 </body>
 </html>
