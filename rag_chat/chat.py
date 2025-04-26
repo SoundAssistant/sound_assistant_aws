@@ -21,7 +21,7 @@ class Chatbot:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": f"請以不超過 80 字的方式回答以下問題：{query}"}
+                {"type": "text", "text": f"請以不超過 50 字的方式回答以下問題：{query}"}
             ]
         }
     ]
