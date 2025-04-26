@@ -73,6 +73,7 @@ HTML = '''
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      position: relative;
     }
     #left {
       background-color: #0b0c10;
@@ -136,6 +137,20 @@ HTML = '''
       z-index: 9999;
       cursor: pointer;
     }
+    #volume_bar {
+      width: 80%;
+      height: 10px;
+      background: #ccc;
+      margin-top: 15px;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #volume_fill {
+      height: 100%;
+      width: 0%;
+      background: #66fcf1;
+      transition: width 0.1s;
+    }
   </style>
 </head>
 
@@ -146,6 +161,7 @@ HTML = '''
 <div id="left">
   <img id="expression" src="/static/animations/wakeup.svg" />
   <div id="status">🎤 等待開始錄音...</div>
+  <div id="volume_bar"><div id="volume_fill"></div></div>
   <audio id="player" controls></audio>
 </div>
 
@@ -157,6 +173,7 @@ HTML = '''
   const socket = io();
   const expr = document.getElementById('expression');
   const status = document.getElementById('status');
+  const volumeFill = document.getElementById('volume_fill');
   const player = document.getElementById('player');
   const chatLog = document.getElementById('chat_log');
   const clickLayer = document.getElementById('click_to_start');
@@ -164,43 +181,91 @@ HTML = '''
   let latestUserQuery = null;
   let mediaRecorder;
   let audioChunks = [];
+  let audioContext;
+  let analyser;
+  let silenceStart = null;
+  const silenceThreshold = 0.02;  // 音量小於這個就視為無聲
+  const silenceDelay = 3000;       // 3秒無聲就判斷停止
 
   window.onload = () => {
     clickLayer.addEventListener('click', async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-
-        mediaRecorder.addEventListener('dataavailable', event => {
-          audioChunks.push(event.data);
-        });
-
-        mediaRecorder.addEventListener('stop', () => {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          audioChunks = [];
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64Audio = reader.result.split(',')[1];
-            socket.emit('audio_blob', base64Audio);
-            status.innerText = '📨 上傳音訊中...';
-          };
-          reader.readAsDataURL(audioBlob);
-        });
-
-        mediaRecorder.start();
-        status.innerText = '🎤 錄音中...';
+        await startRecording();
         clickLayer.style.display = 'none';
-
-        setTimeout(() => {
-          mediaRecorder.stop();
-          status.innerText = '⏳ 處理音訊中...';
-        }, 6000); // 錄 6 秒，自動停止
       } catch (err) {
         console.error('⚠️ 無法啟動錄音：', err);
         status.innerText = '❌ 無法啟動錄音';
       }
     });
   };
+
+  async function startRecording() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+
+    mediaRecorder.addEventListener('dataavailable', event => {
+      audioChunks.push(event.data);
+    });
+
+    mediaRecorder.addEventListener('stop', async () => {
+      if (audioChunks.length > 0) {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        audioChunks = [];
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Audio = reader.result.split(',')[1];
+          socket.emit('audio_blob', base64Audio);
+          status.innerText = '📨 上傳音訊中...';
+        };
+        reader.readAsDataURL(audioBlob);
+      }
+      if (audioContext) {
+        audioContext.close();
+      }
+      setTimeout(startRecording, 1000); // 錄完後隔1秒再開始新一段
+    });
+
+    mediaRecorder.start();
+    status.innerText = '🎤 錄音中...';
+
+    silenceStart = Date.now();
+    monitorSilence();
+  }
+
+  function monitorSilence() {
+    const dataArray = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const normalized = (dataArray[i] - 128) / 128;
+      sum += normalized * normalized;
+    }
+    const volume = Math.sqrt(sum / dataArray.length);
+    
+    // 更新音量條
+    const volumePercentage = Math.min(100, Math.floor(volume * 300)); // 放大音量變化
+    volumeFill.style.width = volumePercentage + '%';
+
+    if (volume > silenceThreshold) {
+      silenceStart = Date.now(); // 有聲音，更新最後發聲時間
+    }
+
+    if (Date.now() - silenceStart > silenceDelay) {
+      console.log('🛑 無聲超過3秒，自動停止錄音');
+      mediaRecorder.stop();
+      return;
+    }
+
+    requestAnimationFrame(monitorSilence);
+  }
 
   socket.on('expression', (path) => {
     expr.src = path;
@@ -240,12 +305,17 @@ HTML = '''
 
 </body>
 </html>
+
 '''
 
 # --- 音訊處理 ---
 @socketio.on('audio_blob')
 def handle_audio_blob(base64_audio):
     logger.info("[handle_audio_blob] 收到音訊 blob，準備轉文字...")
+    
+    # ⭐ 新增：收到音訊後馬上切換成 thinking.gif
+    socketio.emit('expression', '/static/animations/thinking.gif')
+
     try:
         audio_data = base64.b64decode(base64_audio)
 
@@ -263,6 +333,7 @@ def handle_audio_blob(base64_audio):
 
     except Exception as e:
         logger.error(f"[handle_audio_blob] 音訊處理失敗：{e}")
+
 
 async def process_audio_file(file_path):
     try:
