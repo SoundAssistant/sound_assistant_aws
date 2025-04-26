@@ -18,7 +18,7 @@ class TranscribeHandler(TranscriptResultStreamHandler):
                         await self.final_transcripts.put(text)
 
 class LiveTranscriber:
-    def __init__(self, region="us-west-2", callback=None, silence_timeout=6.0):
+    def __init__(self, region="us-west-2", callback=None, silence_timeout=1.5):
         self.client = TranscribeStreamingClient(region=region)
         self.callback = callback
         self.silence_timeout = silence_timeout  # ✅ 停頓幾秒觸發送出
@@ -84,7 +84,6 @@ class LiveTranscriber:
                 print(f"📝 偵測到新文字：{text}")
                 self.buffer.append(text)
 
-                self.buffer.append(text)  # ✅ 暫存文字
 
                 # 有新的文字，重新啟動 silence timer
                 if self.timer_task:
