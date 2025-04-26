@@ -50,3 +50,6 @@ if __name__ == "__main__":
     task = "幫我把這杯水倒入杯子中，然後跟使用者說「完成了」。"
     output = decompose_action(task)
     print("模型回應：\n", output)
+    task = "NBA怎麼報名"
+    output = decompose_action(task)
+    print("模型回應：\n", output)
