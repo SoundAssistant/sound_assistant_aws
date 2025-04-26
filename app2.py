@@ -104,7 +104,8 @@ HTML = '''
       display: flex;
       flex-direction: column;
       gap: 20px;
-      padding-bottom: 80px;
+      padding-top: 30px;
+      padding-bottom: 50px;
     }
     .chat_entry {
       background: #45a29e;
