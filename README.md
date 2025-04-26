@@ -7,7 +7,7 @@
 [影片連結](url)
 
 ## 專案架構: 
-![image](url)
+![image](https://github.com/SoundAssistant/sound_assistant_aws/blob/main/arch.png)
 
 **Environment**<br>
 Platform: Windows 11<br>
