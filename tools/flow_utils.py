@@ -72,7 +72,7 @@ def main_flow():
         print(f"⚠️ 發生錯誤：{e}")
 
 def action_flow(query):
-    decomposer = ActionDecomposer(model_id = "anthropic.claude-3-haiku-20240307-v1:0")
+    decomposer = ActionDecomposer(model_id = "anthropic.claude-3-sonnet-20240229-v1:0")
     response = decomposer.decompose(query)
     print(response)
 

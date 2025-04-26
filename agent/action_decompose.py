@@ -5,7 +5,7 @@ import json
 class ActionDecomposer:
     def __init__(self, model_id=None):
         self.client = boto3.client("bedrock-runtime")
-        self.model_id = model_id or "anthropic.claude-3-haiku-20240307-v1:0"
+        self.model_id = model_id or "anthropic.claude-3-sonnet-20240229-v1:0"
         self.system_prompt = """
 你是一個機器人動作拆解助理，使用者會傳來一段「動作任務」文字，你的工作是：
 
@@ -25,6 +25,7 @@ class ActionDecomposer:
 - 步驟說明中不要使用 A物體、A液體等字眼，直接改為代表物體。
 - 到液體前應要在拿起該容器的狀態，結束才要放下該容器。
 - 倒液體的動作要有相應的停下動作。
+- 按下或放開按鈕僅代表該物理動作，不應預設其用途（例如開機、關機等），用途請由任務語意推斷。
 - 說話的步驟，請使用中文引號「」標註說話內容。
 - 無法執行時，不用額外解釋。
 
@@ -63,7 +64,11 @@ class ActionDecomposer:
 範例輸入(4):
 幫我開啟辦公室中的電腦
 範例輸出(4):
-1 → 
+1 → 6 → 7 → 8
+走到電腦位置
+按下開機按鈕
+放開開機按鈕
+說話，通知使用者
 
 可執行清單：
 1. 從 A 走到 B
@@ -103,6 +108,6 @@ class ActionDecomposer:
 
 if __name__ == "__main__":
     decomposer = ActionDecomposer()
-    task = "啟動辦公室中的電腦。"
+    task = "幫我訂便當"
     output = decomposer.decompose(task)
     print("模型回應：\n", output)
