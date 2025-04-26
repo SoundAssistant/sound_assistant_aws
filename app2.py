@@ -82,7 +82,7 @@ HTML = '''
     #right {
       background-color: #1f2833;
       overflow-y: auto;
-      padding: 30px 20px;
+      padding: 30px 20px 30px 20px;
     }
     #expression {
       width: 85%;
@@ -104,6 +104,7 @@ HTML = '''
       display: flex;
       flex-direction: column;
       gap: 20px;
+      padding-bottom: 80px;
     }
     .chat_entry {
       background: #45a29e;
