@@ -14,11 +14,11 @@ Platform: Windows 11<br>
 Python version: 3.12.9<br>
 
 **Configuration**<br>
-You need to add those settings in `config.env` your `HACK_MD_API_TOKEN`
+You need to add those settings in `config.env` your `TAVILY_API_KEY`
 
 **Build**<br>
 For conda virtual environment (recommanded)
-Pre-requirement : You need to create the tavily and aws access token in `.env`
+Pre-requirement : You need to create the tavily and aws access token in `.env` or using aws cli to configure
 ```
 conda create --name 'YOUR_ENV_NAME'
 conda activate 'YOUR_ENV_NAME'
