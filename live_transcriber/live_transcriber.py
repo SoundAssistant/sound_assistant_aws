@@ -18,12 +18,27 @@ class TranscribeHandler(TranscriptResultStreamHandler):
                         await self.final_transcripts.put(text)
 
 class LiveTranscriber:
-    def __init__(self, region="us-west-2", callback=None, silence_timeout=1.5):
+    def __init__(self, region="us-west-2", callback=None, silence_timeout=3.5):
         self.client = TranscribeStreamingClient(region=region)
         self.callback = callback
-        self.silence_timeout = silence_timeout  # ✅ 停頓幾秒觸發送出
-        self.buffer = []  # ✅ 暫存文字
-        self.timer_task = None  # ✅ 計時器 task
+        self.silence_timeout = silence_timeout
+        self.buffer = []
+        self.timer_task = None
+
+        # 🔥 自動找一個有"mic"字樣的裝置
+        devices = sounddevice.query_devices()
+        mic_index = None
+        for i, d in enumerate(devices):
+            if 'mic' in d['name'].lower() and d['max_input_channels'] > 0:
+                mic_index = i
+                break
+
+        if mic_index is None:
+            print("⚠️ 找不到麥克風裝置，會用預設輸入裝置")
+            self.input_device = None
+        else:
+            print(f"🎤 選用麥克風裝置：{devices[mic_index]['name']}")
+            self.input_device = mic_index
     def is_valid_text(self, text: str) -> bool:
         text = text.strip()
         if not text:
@@ -42,6 +57,7 @@ class LiveTranscriber:
             loop.call_soon_threadsafe(input_queue.put_nowait, (bytes(indata), status))
 
         stream = sounddevice.RawInputStream(
+            device=self.input_device,  # 🔥 指定麥克風
             channels=1,
             samplerate=16000,
             callback=callback,
@@ -114,4 +130,10 @@ class LiveTranscriber:
         if self.callback:
             await self.callback(full_text)
 
-        self.buffer.clear()  # 清空 buffer 等下一輪
+        self.buffer.clear()
+
+        # 🔥 強制休息 2~3秒
+        wait_time = 3 + (asyncio.get_event_loop().time() % 1)  # 2.0~3.0秒之間
+        print(f"⏳ 等待 {wait_time:.2f} 秒避免過快連續送出...")
+        await asyncio.sleep(wait_time)
+

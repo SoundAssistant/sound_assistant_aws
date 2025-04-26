@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, static_folder="static")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# --- 🔥 可取消的處理任務狀態
+current_task = None
+current_task_lock = threading.Lock()
+
 HTML = '''
 <!doctype html>
 <html lang="zh-TW">
@@ -202,15 +206,15 @@ def index():
 def get_audio(filename):
     return send_from_directory('history_result', filename)
 
-async def socket_handle_text(text: str):
+async def handle_text(text: str):
     try:
-        logger.info(f"[socket_handle_text] 收到完整文字：{text}")
+        logger.info(f"[handle_text] 收到完整文字：{text}")
         socketio.emit('status', f"📝 偵測到文字：{text}")
         socketio.emit('user_query', text)
 
         tc = TaskClassifier()
         task_type, _ = tc.classify_task(text)
-        logger.info(f"[socket_handle_text] 任務分類結果：{task_type}")
+        logger.info(f"[handle_text] 任務分類結果：{task_type}")
 
         socketio.emit('expression', '/static/animations/thinking.gif')
 
@@ -242,7 +246,7 @@ async def socket_handle_text(text: str):
             socketio.emit('text_response', generated_text)
 
         if audio_path and Path(audio_path).exists():
-            logger.info(f"[socket_handle_text] 音檔生成完成：{audio_path}")
+            logger.info(f"[handle_text] 音檔生成完成：{audio_path}")
             audio_url = f"/history_result/{os.path.basename(audio_path)}"
             socketio.emit('expression', '/static/animations/speaking.gif')
             socketio.emit('audio_url', audio_url)
@@ -250,18 +254,31 @@ async def socket_handle_text(text: str):
         socketio.emit('status', '✅ 已完成。')
 
     except Exception as e:
-        logger.error(f"[socket_handle_text] 發生錯誤：{e}")
+        logger.error(f"[handle_text] 發生錯誤：{e}")
+
+async def cancellable_socket_handle_text(text: str):
+    global current_task
+
+    with current_task_lock:
+        # 先取消舊的
+        if current_task and not current_task.done():
+            logger.info("[cancellable_socket_handle_text] 取消上一個任務...")
+            current_task.cancel()
+
+        # 再開新的
+        loop = asyncio.get_running_loop()
+        current_task = loop.create_task(handle_text(text))
 
 def run_transcriber():
     logger.info("[run_transcriber] 啟動 LiveTranscriber！")
     with app.app_context():
         attempt = 0
-        max_attempts = 2  # ✅ 最多試 2 次（第一次+重試一次）
+        max_attempts = 2
         while attempt < max_attempts:
             try:
-                transcriber = LiveTranscriber(region="us-west-2", callback=socket_handle_text)
+                transcriber = LiveTranscriber(region="us-west-2", callback=cancellable_socket_handle_text)
                 asyncio.run(transcriber.start())
-                break  # ✅ 成功就跳出 while
+                break
             except Exception as e:
                 attempt += 1
                 logger.error(f"[run_transcriber] LiveTranscriber 連線失敗（第 {attempt} 次），錯誤: {e}")
@@ -269,8 +286,7 @@ def run_transcriber():
                     logger.error("[run_transcriber] 已達最大重試次數，放棄連線。")
                 else:
                     logger.info("[run_transcriber] 等待 2 秒後重試...")
-                    time.sleep(1)  # ✅ 小等一下再重試
-
+                    time.sleep(1)
 
 @socketio.on('start_listening')
 def handle_start():
