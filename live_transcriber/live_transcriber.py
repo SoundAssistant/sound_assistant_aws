@@ -18,7 +18,7 @@ class TranscribeHandler(TranscriptResultStreamHandler):
                         await self.final_transcripts.put(text)
 
 class LiveTranscriber:
-    def __init__(self, region="us-west-2", callback=None, silence_timeout=5.0):
+    def __init__(self, region="us-west-2", callback=None, silence_timeout=6.0):
         self.client = TranscribeStreamingClient(region=region)
         self.callback = callback
         self.silence_timeout = silence_timeout  # ✅ 停頓幾秒觸發送出
