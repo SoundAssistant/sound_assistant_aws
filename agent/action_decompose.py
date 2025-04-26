@@ -1,11 +1,18 @@
 import os
 import boto3
 import json
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from tools.cache_utils import get_cache  # 要用跟 Chatbot 一樣的 cache
+from botocore.exceptions import ClientError
 
 class ActionDecomposer:
     def __init__(self, model_id=None):
         self.client = boto3.client("bedrock-runtime")
         self.model_id = model_id or "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        self.cache = get_cache()
+
         self.system_prompt = """
 你是一個機器人動作拆解助理，使用者會傳來一段「動作任務」文字，你的工作是：
 
@@ -19,7 +26,6 @@ class ActionDecomposer:
 - 並逐步列出每個編號對應的簡短文字說明（每行一個步驟）。
 - 步驟說明務必簡單清楚，不可添加多餘說明或推測。
 - 動作無法執行時，不要額外解釋原因。
-
 
 【步驟說明】
 - 步驟說明中不要使用 A物體、A液體等字眼，直接改為代表物體。
@@ -97,7 +103,8 @@ class ActionDecomposer:
 
 """
 
-    def decompose(self, task_text: str) -> str:
+    def _generate_response(self, task_text: str) -> str:
+        """真正丟 Bedrock 的方法，內部用"""
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 512,
@@ -121,6 +128,17 @@ class ActionDecomposer:
         payload = json.loads(result)
         content_blocks = payload.get("content", [])
         return "\n".join(block.get("text", "") for block in content_blocks).strip()
+
+    def decompose(self, task_text: str) -> str:
+        """先查 cache，沒中才丟模型"""
+        try:
+            response = self.cache.get_or_generate_response(
+                task_text, self._generate_response
+            )
+            return response
+        except ClientError as e:
+            print(f"API ERROR: {e}")
+            return "目前伺服器有問題，請稍後再試。"
 
 if __name__ == "__main__":
     decomposer = ActionDecomposer()
