@@ -29,6 +29,7 @@ def search_flow(query: str):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     tts_model.synthesize(answer, f"./history_result/output_search_{timestamp}.mp3")
     print(f"🔎 搜尋結果：{answer}")
+    return f"./history_result/output_search_{timestamp}.mp3"
 
 def chat_flow(query: str):
     chat_model = Chatbot(model_id="anthropic.claude-3-haiku-20240307-v1:0")
@@ -38,6 +39,7 @@ def chat_flow(query: str):
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     tts_model.synthesize(response, f"./history_result/output_chat_{timestamp}.mp3")
     print(f"💬 聊天回應：{response}")
+    return f"./history_result/output_chat_{timestamp}.mp3"
 
 def task_flow(query: str) -> str:
     task_classifier = TaskClassifier()
