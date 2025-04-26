@@ -81,7 +81,7 @@ class PromptBuilder:
         </question>
 
         回答要求：
-        - 請以 50 到 130 字之間總結回答
+        - 請以 50 到 70 字之間總結回答
         - 不要逐字抄寫內容，要用自己的話整理重點
         - 如果資料不足，請回答：「根據目前的資料無法回答此問題。」
         - 不要附上資料來源或連結
@@ -100,7 +100,7 @@ class ConversationalModel:
                 "text": (
                     "You are a strict question answering assistant. "
                     "You must answer ONLY based on the provided <context>. "
-                    "Summarize the answer concisely in 50 to 130 words. "
+                    "Summarize the answer concisely in 50 to 70 words. "
                     "If the context does not contain the answer, reply with: '根據目前的資料無法回答此問題。' "
                     "Do not copy long sentences from the context directly. "
                     "Please DO NOT include any source links or citations in your answer."
