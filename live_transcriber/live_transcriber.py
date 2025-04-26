@@ -1,55 +1,48 @@
 # live_transcriber/live_transcriber.py
 # -----------------------------------------------------------
-# 以 AWS Transcribe Streaming + Bedrock (Haiku) 實現：
-#  1. 持續錄音（麥克風永不關閉）
-#  2. 停頓後將累積文字送 Bedrock 分類
-#  3. 判斷 START / STOP / INTERRUPT / COMMAND
-#  4. 啟動模式下才能執行 callback；INTERRUPT 會中斷舊命令
+# 以 AWS Transcribe Streaming + Bedrock Claude-3 Haiku 實現：
+#   • 一直錄音、停頓後送文字
+#   • Bedrock 分類 START / STOP / INTERRUPT / COMMAND
+#   • 中斷、啟動、結束控制
 # -----------------------------------------------------------
 
-import asyncio
-import sounddevice
-import boto3
+import asyncio, json, sounddevice, boto3
+from botocore.config import Config
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent
-import json, asyncio
-from botocore.config import Config
 
-# ---------- AWS 連線 ----------
-REGION = "us-west-2"          # ✅ 改成你的預設區域
-MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
-BEDROCK = boto3.client(
-    "bedrock-runtime",
-    region_name="us-west-2",
-    config=Config(read_timeout=20, connect_timeout=5)  # 避免長時間卡住
-)
-# ------------------------------
+# ---------- Bedrock 參數 ----------
+REGION    = "us-west-2"                                   # 改成你的區域
+MODEL_ID  = "anthropic.claude-3-haiku-20240307-v1:0"       # 改成你的模型
+BEDROCK   = boto3.client("bedrock-runtime",
+                         region_name=REGION,
+                         config=Config(read_timeout=20, connect_timeout=5))
+# ----------------------------------
 
+# ---------- 分類提示 ----------
 _CLASSIFY_PROMPT = """
-請判斷下列文字的意圖，僅回傳以下四個關鍵字之一（不含其他字）：
-START   # 像「嘿史多比」啟動詞
-STOP    # 像「史多比再見」結束詞
-INTERRUPT  # 在啟動模式中，嘗試打斷上一個還在執行的命令
-COMMAND # 一般命令
+請判斷下列文字的意圖，只能回答以下四個字串之一：
+START / STOP / INTERRUPT / COMMAND
 
-文字："{text}"
+文字：「{text}」
 """
+# ----------------------------------
 
-# ========== Transcribe 事件處理 ==========
+# ---------- Transcribe 事件處理 ----------
 class TranscribeHandler(TranscriptResultStreamHandler):
     def __init__(self, stream):
         super().__init__(stream)
         self.final_transcripts = asyncio.Queue()
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent):
-        for result in transcript_event.transcript.results:
-            if not result.is_partial:
-                for alt in result.alternatives:
+        for r in transcript_event.transcript.results:
+            if not r.is_partial:
+                for alt in r.alternatives:
                     t = alt.transcript.strip()
                     if t:
                         await self.final_transcripts.put(t)
-# ========================================
+# ------------------------------------------
 
 class LiveTranscriber:
     def __init__(self, region="us-west-2", callback=None, silence_timeout=2.0):
@@ -57,57 +50,54 @@ class LiveTranscriber:
         self.callback = callback
         self.silence_timeout = silence_timeout
 
-        self.buffer: list[str] = []           # 累積文字
+        self.buffer: list[str] = []
         self.timer_task: asyncio.Task | None = None
-        self.active = False                   # 啟動模式
+        self.active = False
         self.current_task: asyncio.Task | None = None
 
     # ---------- Bedrock 分類 ----------
     async def classify_intent(self, text: str) -> str:
-        prompt = _CLASSIFY_PROMPT.format(text=text.replace('"', '\\"'))
+        user_prompt = _CLASSIFY_PROMPT.format(text=text.replace('"', '\\"'))
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1,
+            "temperature": 0,
+            "messages": [
+                {"role": "system",
+                 "content": "你是語音助理的意圖分類器，只回答 START、STOP、INTERRUPT、COMMAND 四種之一。"},
+                {"role": "user", "content": user_prompt}
+            ]
+        }
 
-        def _call_bedrock() -> str:
-            body = json.dumps({
-                "prompt": prompt,
-                "max_tokens_to_sample": 1,
-                "temperature": 0
-            }).encode("utf-8")
-
+        def _invoke():
             resp = BEDROCK.invoke_model(
                 modelId=MODEL_ID,
-                accept="application/json",
                 contentType="application/json",
-                body=body
+                accept="application/json",
+                body=json.dumps(body).encode("utf-8")
             )
-            raw = resp["body"].read().decode()
-            try:
-                out_json = json.loads(raw)
-                return out_json.get("completion", "").strip().upper()
-            except json.JSONDecodeError:
-                return raw.strip().upper()  # 防禦：拿不到 JSON 直接回原字串
+            data = json.loads(resp["body"].read())
+            return data["content"][0]["text"].strip().upper()
 
         try:
-            intent = await asyncio.to_thread(_call_bedrock)   # 非阻塞化
-            if intent not in {"START", "STOP", "INTERRUPT", "COMMAND"}:
-                print(f"⚠️  Bedrock 回傳未知字串：{intent}")
-                return "IGNORE"
-            return intent
+            intent = await asyncio.to_thread(_invoke)
+            return intent if intent in {"START", "STOP", "INTERRUPT", "COMMAND"} else "IGNORE"
         except Exception as e:
-            print(f"⚠️  Bedrock 呼叫失敗：{e}")
+            print("⚠️  Bedrock 失敗：", e)
             return "IGNORE"
     # -----------------------------------
 
-    # ---------- 麥克風 ---------- 
+    # ---------- 麥克風 ----------
     async def mic_stream(self):
         loop = asyncio.get_event_loop()
         q: asyncio.Queue = asyncio.Queue()
 
-        def _audio_cb(indata, frame_count, time_info, status):
-            loop.call_soon_threadsafe(q.put_nowait, (bytes(indata), status))
+        def _cb(indata, *_):
+            loop.call_soon_threadsafe(q.put_nowait, (bytes(indata), None))
 
         with sounddevice.RawInputStream(
             samplerate=16000, channels=1, dtype="int16",
-            callback=_audio_cb, blocksize=1024 * 2
+            callback=_cb, blocksize=2048
         ):
             while True:
                 yield await q.get()
@@ -118,7 +108,7 @@ class LiveTranscriber:
             await stream.input_stream.send_audio_event(audio_chunk=chunk)
         await stream.input_stream.end_stream()
 
-    # ---------- 任務取消 ----------
+    # ---------- 取消目前任務 ----------
     def _cancel_current(self):
         if self.current_task and not self.current_task.done():
             print("⚡ 中斷上一個命令")
@@ -126,22 +116,22 @@ class LiveTranscriber:
         self.current_task = None
     # -----------------------------------
 
-    # ========== 主入口 ==========
+    # ========== 主流程 ==========
     async def start(self):
         stream = await self.client.start_stream_transcription(
             language_code="zh-TW",
             media_sample_rate_hz=16000,
-            media_encoding="pcm",
+            media_encoding="pcm"
         )
         handler = TranscribeHandler(stream.output_stream)
-
         runners = asyncio.gather(self.write_chunks(stream), handler.handle_events())
-        print("系統待機：請說啟動詞…")
+
+        print("🎤 系統待機：請說啟動詞…")
 
         try:
             while True:
                 t = await handler.final_transcripts.get()
-                print("收到片段：", t)
+                print("📝 收到片段：", t)
                 self.buffer.append(t)
 
                 if self.timer_task:
@@ -173,13 +163,13 @@ class LiveTranscriber:
         intent = await self.classify_intent(text)
         print("🔍 意圖分類：", intent)
 
-        # ---------- START ----------
+        # START
         if intent == "START":
             self.active = True
             print("🚀 已啟動，等待命令…")
             return
 
-        # ---------- STOP ----------
+        # STOP
         if intent == "STOP":
             if self.active:
                 self._cancel_current()
@@ -187,29 +177,25 @@ class LiveTranscriber:
             self.active = False
             return
 
-        # ---------- INTERRUPT ----------
+        # INTERRUPT
         if intent == "INTERRUPT":
             if self.active and self.current_task and not self.current_task.done():
                 self._cancel_current()
                 print("🔄 已中斷，等待新命令…")
             else:
-                print("ℹ️ Interrupt 但無任務可中斷，忽略")
+                print("ℹ️ Interrupt 但無任務可中斷")
             return
 
-        # ---------- COMMAND ----------
+        # COMMAND
         if intent == "COMMAND":
             if not self.active:
                 print("❔ 尚未啟動，忽略命令")
                 return
-
-            # 若任務仍在進行，先中斷
             if self.current_task and not self.current_task.done():
                 self._cancel_current()
-
-            print("執行新命令：", text)
+            print("✅ 執行新命令：", text)
             self.current_task = asyncio.create_task(self.callback(text))
             return
 
-        # ---------- 其他 ----------
         print("ℹ️ 非法或忽略意圖")
 # -----------------------------------------------------------
