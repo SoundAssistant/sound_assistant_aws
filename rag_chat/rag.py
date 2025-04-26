@@ -80,9 +80,8 @@ class PromptBuilder:
         {query}
         </question>
 
-        如果您使用了某個資料來作答，請務必在回答最後加上：
-        【資料來源】：對應的網址（若有多個可列多個）
-        若無法從資料中得到答案，請明確回答「根據目前的資料無法回答此問題。」。
+        如果無法從資料中得到答案，請明確回答：「根據目前的資料無法回答此問題。」。
+        請直接回答內容，不需要列出資料來源。
         """
 
 class ConversationalModel:
@@ -96,10 +95,12 @@ class ConversationalModel:
                 "text": (
                     "You are a strict question answering assistant. "
                     "You must answer ONLY based on the provided <context>. "
-                    "If the context does not contain the answer, reply with: '根據目前的資料無法回答此問題。'"
+                    "If the context does not contain the answer, reply with: '根據目前的資料無法回答此問題。' "
+                    "Please DO NOT include any source links or citations in your answer."
                 )
             }
         ]
+
 
     def converse(self, messages: List[Dict]) -> Dict:
         response = self.client.converse(
