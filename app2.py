@@ -189,6 +189,7 @@ let recordingStartTime = null;
 let silenceStart = null;
 let weakNoiseStart = null;
 let backgroundVolumes = [];
+let hasRecordedOnce = false; 
 
 const baseThreshold = 0.08;             // 基本啟動門檻
 let dynamicThreshold = baseThreshold;    // 動態啟動門檻
@@ -225,6 +226,7 @@ async function prepareMicrophone() {
   });
 
   mediaRecorder.addEventListener('stop', async () => {
+    hasRecordedOnce = true;
     if (audioChunks.length > 0) {
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
       audioChunks = [];
@@ -251,7 +253,14 @@ function startListening() {
   backgroundVolumes = [];
   audioChunks = [];
   status.innerText = '👂 正在靜音監聽中...';
-  expr.src = '/static/animations/thinking.gif';
+  
+  // ⭐ 重點：第一次用 wakeup.svg，以後用 thinking.gif
+  if (!hasRecordedOnce) {
+    expr.src = '/static/animations/wakeup.svg';
+  } else {
+    expr.src = '/static/animations/thinking.gif';
+  }
+
   monitorVolume();
 }
 
