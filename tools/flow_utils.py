@@ -12,12 +12,6 @@ from agent.action_decompose import ActionDecomposer
 from task_classification.task_classification import TaskClassifier
 from live_transcriber.live_transcriber import LiveTranscriber
 
-def action_flow(query: str):
-    decomposer = ActionDecomposer()
-    output = decomposer.decompose(query)
-    print(output)
-    return output 
-
 def search_flow(query: str):
     web_searcher = WebSearcher(max_results=3, search_depth="advanced", use_top_only=True)
     model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
