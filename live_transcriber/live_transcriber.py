@@ -57,34 +57,37 @@ class LiveTranscriber:
 
     # ---------- Bedrock 分類 ----------
     async def classify_intent(self, text: str) -> str:
-        user_prompt = _CLASSIFY_PROMPT.format(text=text.replace('"', '\\"'))
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1,
-            "temperature": 0,
-            "messages": [
-                {"role": "system",
-                 "content": "你是語音助理的意圖分類器，只回答 START、STOP、INTERRUPT、COMMAND 四種之一。"},
-                {"role": "user", "content": user_prompt}
-            ]
-        }
-
-        def _invoke():
-            resp = BEDROCK.invoke_model(
-                modelId=MODEL_ID,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body).encode("utf-8")
-            )
-            data = json.loads(resp["body"].read())
-            return data["content"][0]["text"].strip().upper()
-
-        try:
-            intent = await asyncio.to_thread(_invoke)
-            return intent if intent in {"START", "STOP", "INTERRUPT", "COMMAND"} else "IGNORE"
-        except Exception as e:
-            print("⚠️  Bedrock 失敗：", e)
-            return "IGNORE"
+      user_prompt = _CLASSIFY_PROMPT.format(text=text.replace('"', '\\"'))
+  
+      body = {
+          "anthropic_version": "bedrock-2023-05-31",
+          "max_tokens": 1,
+          "temperature": 0,
+          "system": (
+              "你是語音助理的意圖分類器，只回答 "
+              "START / STOP / INTERRUPT / COMMAND 四種之一。"
+          ),
+          "messages": [
+              {"role": "user", "content": user_prompt}
+          ]
+      }
+  
+      def _invoke():
+          resp = BEDROCK.invoke_model(
+              modelId=MODEL_ID,
+              contentType="application/json",
+              accept="application/json",
+              body=json.dumps(body).encode("utf-8")
+          )
+          data = json.loads(resp["body"].read())
+          return data["content"][0]["text"].strip().upper()
+  
+      try:
+          intent = await asyncio.to_thread(_invoke)
+          return intent if intent in {"START", "STOP", "INTERRUPT", "COMMAND"} else "IGNORE"
+      except Exception as e:
+          print("⚠️  Bedrock 失敗：", e)
+          return "IGNORE"
     # -----------------------------------
 
     # ---------- 麥克風 ----------
