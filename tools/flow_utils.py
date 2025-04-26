@@ -59,9 +59,14 @@ async def handle_text(text: str):
         print(f"❓ 未知任務類型：{task_type}")
 
 async def stt_flow():
-    transcriber = LiveTranscriber(region="us-west-2", callback=handle_text)
+    
+    transcriber = LiveTranscriber(
+        region="us-west-2",
+        callback=handle_text,      # 你定義的 handle_text
+        silence_timeout=6.0
+    )
     await transcriber.start()
-
+    
 def main_flow():
     try:
         asyncio.run(stt_flow())
