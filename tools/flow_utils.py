@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from rag_chat.rag import RAGPipeline, WebSearcher, ConversationalModel
 from rag_chat.chat import Chatbot
 from tts.tts import PollyTTS
-from cache_utils import get_cache
+from tools.cache_utils import get_cache
 from agent.action_decompose import ActionDecomposer
 from task_classification.task_classification import TaskClassifier
 from live_transcriber.live_transcriber import LiveTranscriber
@@ -27,9 +27,9 @@ def search_flow(query: str):
     
     tts_model = PollyTTS()
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    tts_model.synthesize(answer, f"./history_result/output_search_{timestamp}.mp3")
+    tts_model.synthesize(answer, f"./history_result/output_search_{timestamp}.wav")
     print(f"🔎 搜尋結果：{answer}")
-    return f"./history_result/output_search_{timestamp}.mp3"
+    return f"./history_result/output_search_{timestamp}.wav"
 
 def chat_flow(query: str):
     chat_model = Chatbot(model_id="anthropic.claude-3-haiku-20240307-v1:0")
@@ -37,9 +37,9 @@ def chat_flow(query: str):
 
     tts_model = PollyTTS()
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    tts_model.synthesize(response, f"./history_result/output_chat_{timestamp}.mp3")
+    tts_model.synthesize(response, f"./history_result/output_chat_{timestamp}.wav")
     print(f"💬 聊天回應：{response}")
-    return f"./history_result/output_chat_{timestamp}.mp3"
+    return f"./history_result/output_chat_{timestamp}.wav"
 
 def task_flow(query: str) -> str:
     task_classifier = TaskClassifier()

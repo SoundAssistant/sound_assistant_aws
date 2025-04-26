@@ -1,9 +1,11 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import asyncio
 import time
 import os
 from pathlib import Path
-from pydub import AudioSegment
 import threading
 
 from tools.flow_utils import task_flow, chat_flow, search_flow, action_flow
@@ -15,39 +17,38 @@ st.title("Robot Emotions 🤖")
 
 # --- 預設畫面 ---
 expression_placeholder = st.empty()
-expression_placeholder.image("animations/wakeup.svg", use_column_width=True)
+expression_placeholder.image("animations/wakeup.svg", use_container_width=True)
+
 
 # --- 狀態記憶 ---
 if "recording" not in st.session_state:
     st.session_state.recording = False
 
 def set_expression(img_path):
-    expression_placeholder.image(img_path, use_column_width=True)
+    expression_placeholder.image(img_path, use_container_width=True)
 
 async def process_text(text: str):
     set_expression('animations/thinking.gif')
     await asyncio.sleep(0.1)
 
     task_type = task_flow(text)
-    mp3_path = None
+    audio_path = None
 
     if task_type == "聊天":
-        mp3_path = chat_flow(text)
+        audio_path = chat_flow(text)  # 這裡你的 chat_flow 要記得改回產生 .wav
     elif task_type == "查詢":
-        mp3_path = search_flow(text)
+        audio_path = search_flow(text)  # search_flow 也是
     elif task_type == "行動":
         action_flow(text)
-        mp3_path = None
+        audio_path = None
     else:
         print(f"❓ 未知任務類型：{task_type}")
 
-    # --- 撥放 mp3 ---
-    if mp3_path and Path(mp3_path).exists():
-        await asyncio.sleep(1)  # 等 mp3 產生
+    # --- 撥放 wav ---
+    if audio_path and Path(audio_path).exists():
+        await asyncio.sleep(1)  # 等檔案生成完成
         set_expression('animations/speaking.gif')
-        audio = AudioSegment.from_mp3(mp3_path)
-        audio.export("temp.wav", format="wav")
-        audio_file = open("temp.wav", "rb")
+        audio_file = open(audio_path, "rb")
         audio_bytes = audio_file.read()
         st.audio(audio_bytes, format='audio/wav')
         audio_file.close()
