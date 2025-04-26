@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from flask import Flask, render_template_string, send_from_directory
 from flask_socketio import SocketIO
-
+from tools.retry_utils import retry_async, retry_sync
 from live_transcriber.live_transcriber import LiveTranscriber
 from rag_chat.rag import RAGPipeline, WebSearcher, ConversationalModel
 from rag_chat.chat import Chatbot
@@ -206,6 +206,56 @@ def index():
 def get_audio(filename):
     return send_from_directory('history_result', filename)
 
+# async def handle_text(text: str):
+#     try:
+#         logger.info(f"[handle_text] 收到完整文字：{text}")
+#         socketio.emit('status', f"📝 偵測到文字：{text}")
+#         socketio.emit('user_query', text)
+
+#         tc = TaskClassifier()
+#         task_type, _ = tc.classify_task(text)
+#         logger.info(f"[handle_text] 任務分類結果：{task_type}")
+
+#         socketio.emit('expression', '/static/animations/thinking.gif')
+
+#         audio_path = None
+#         generated_text = None
+
+#         ts = time.strftime('%Y%m%d_%H%M%S')
+
+#         if task_type == "聊天":
+#             chat_model = Chatbot(model_id="anthropic.claude-3-haiku-20240307-v1:0")
+#             generated_text = chat_model.chat(text)
+#             audio_path = f"./history_result/output_chat_{ts}.mp3"
+#             PollyTTS().synthesize(generated_text, audio_path)
+
+#         elif task_type == "查詢":
+#             ws = WebSearcher(max_results=3, search_depth="advanced", use_top_only=True)
+#             model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
+#             pipeline = RAGPipeline(web_searcher=ws, model=model)
+#             generated_text = pipeline.answer(text)
+#             audio_path = f"./history_result/output_search_{ts}.mp3"
+#             PollyTTS().synthesize(generated_text, audio_path)
+
+#         elif task_type == "行動":
+#             ad = ActionDecomposer()
+#             generated_text = ad.decompose(text)
+#             audio_path = None
+
+#         if generated_text:
+#             socketio.emit('text_response', generated_text)
+
+#         if audio_path and Path(audio_path).exists():
+#             logger.info(f"[handle_text] 音檔生成完成：{audio_path}")
+#             audio_url = f"/history_result/{os.path.basename(audio_path)}"
+#             socketio.emit('expression', '/static/animations/speaking.gif')
+#             socketio.emit('audio_url', audio_url)
+
+#         socketio.emit('status', '✅ 已完成。')
+
+#     except Exception as e:
+#         logger.error(f"[handle_text] 發生錯誤：{e}")
+
 async def handle_text(text: str):
     try:
         logger.info(f"[handle_text] 收到完整文字：{text}")
@@ -213,7 +263,7 @@ async def handle_text(text: str):
         socketio.emit('user_query', text)
 
         tc = TaskClassifier()
-        task_type, _ = tc.classify_task(text)
+        task_type, _ = retry_sync(retries=3, delay=1)(tc.classify_task)(text)
         logger.info(f"[handle_text] 任務分類結果：{task_type}")
 
         socketio.emit('expression', '/static/animations/thinking.gif')
@@ -225,21 +275,21 @@ async def handle_text(text: str):
 
         if task_type == "聊天":
             chat_model = Chatbot(model_id="anthropic.claude-3-haiku-20240307-v1:0")
-            generated_text = chat_model.chat(text)
+            generated_text = retry_sync(retries=3, delay=1)(chat_model.chat)(text)
             audio_path = f"./history_result/output_chat_{ts}.mp3"
-            PollyTTS().synthesize(generated_text, audio_path)
+            retry_sync(retries=3, delay=1)(PollyTTS().synthesize)(generated_text, audio_path)
 
         elif task_type == "查詢":
             ws = WebSearcher(max_results=3, search_depth="advanced", use_top_only=True)
             model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
             pipeline = RAGPipeline(web_searcher=ws, model=model)
-            generated_text = pipeline.answer(text)
+            generated_text = retry_sync(retries=3, delay=1)(pipeline.answer)(text)  # ✅ 改這裡
             audio_path = f"./history_result/output_search_{ts}.mp3"
-            PollyTTS().synthesize(generated_text, audio_path)
+            retry_sync(retries=3, delay=1)(PollyTTS().synthesize)(generated_text, audio_path)
 
         elif task_type == "行動":
             ad = ActionDecomposer()
-            generated_text = ad.decompose(text)
+            generated_text = retry_sync(retries=3, delay=1)(ad.decompose)(text)
             audio_path = None
 
         if generated_text:
@@ -255,6 +305,8 @@ async def handle_text(text: str):
 
     except Exception as e:
         logger.error(f"[handle_text] 發生錯誤：{e}")
+
+
 
 async def cancellable_socket_handle_text(text: str):
     global current_task
