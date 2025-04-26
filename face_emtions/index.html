@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>Robot Emotions</title>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 40px;
+      background: #222;
+      color: #fff;
+    }
+    #robot-face {
+      width: 800px;
+      height: 1000px;
+      object-fit: contain;
+      border: 2px solid #555;
+      border-radius: 8px;
+      background: #000;
+    }
+    .controls button {
+      margin: 0 8px;
+      padding: 8px 16px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Robot Emotions</h1>
+  <img id="robot-face" src="animations/wakeup.svg"  alt="機器人表情" />
+  <div class="controls">
+    <button onclick="setExpression('idle')">待機</button>
+    <button onclick="setExpression('thinking')">思考</button>
+    <button onclick="setExpression('speaking')">說話</button>
+  </div>
+
+  <script>
+    const EXPRESSIONS = {
+      idle:     'animations/idle.gif',
+      thinking: 'animations/thinking.gif',
+      speaking: 'animations/speaking.gif'
+    };
+    const face = document.getElementById('robot-face');
+
+    function setExpression(state) {
+      const url = EXPRESSIONS[state];
+      if (!url) return;
+      // 可加上 fade 效果：
+      face.style.opacity = 0;
+      setTimeout(() => {
+        face.src = url;
+        face.style.opacity = 1;
+      }, 200);
+    }
+
+    // // 模擬後端狀態流 (可改成 WebSocket)
+    // setTimeout(() => setExpression('thinking'), 3000);
+    // setTimeout(() => setExpression('speaking'), 6000);
+    // setTimeout(() => setExpression('idle'), 9000);
+  </script>
+</body>
+</html>
