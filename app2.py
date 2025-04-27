@@ -6,7 +6,6 @@ import logging
 import base64
 import tempfile
 import subprocess
-import json # <-- 新增
 from pathlib import Path
 from flask import Flask, render_template_string, send_from_directory, url_for
 from flask_socketio import SocketIO
@@ -19,22 +18,17 @@ from task_classification.task_classification import TaskClassifier
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent
-import boto3 # <-- 新增
-from botocore.config import Config # <-- 新增
 
 # --- 環境初始化 ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static")
-# 如果部署在非本地環境，可能需要移除或修改 SERVER_NAME
-# app.config['SERVER_NAME'] = 'localhost:5000' # 可能需要調整或移除
+app.config['SERVER_NAME'] = 'localhost:5000'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 current_task = None
 current_task_lock = threading.Lock()
-is_active = False # <-- 新增：系統啟動狀態
-is_active_lock = threading.Lock() # <-- 新增：狀態鎖
 
 # --- 啟動時檢查 ffmpeg ---
 try:
@@ -43,97 +37,16 @@ except Exception:
     logger.error("❌ 找不到 ffmpeg，請安裝 ffmpeg。")
     raise
 
-# ---------- Bedrock 參數 ----------
-REGION    = "us-west-2"                                   # 改成你的區域 (與 Transcribe 同區)
-MODEL_ID  = "anthropic.claude-3-haiku-20240307-v1:0"       # 改成你的模型
-BEDROCK   = boto3.client("bedrock-runtime",
-                         region_name=REGION,
-                         config=Config(read_timeout=300, connect_timeout=10)) # 增加超時時間
-# ----------------------------------
-
-# ---------- 分類提示 ----------
-_CLASSIFY_PROMPT = """
-請判斷下列文字的意圖，只能回答以下四個字串之一：
-START/STOP/INTERRUPT/COMMAND
-START (啟動關鍵字): 例如「啟動」、「你好」、「哈囉」、「機器人」等等
-STOP (結束關鍵字): 例如「關閉」、「再見」、「掰掰」、「結束」等等
-INTERRUPT (打斷關鍵字): 例如「等一下」、「暫停」、「閉嘴」、「停」等等
-COMMAND (一般命令): 前三者以外，都歸類於此
-
-**務必輸出其中一個字串**
-
-文字：「{text}」
-"""
-# ----------------------------------
-
-# ---------- Bedrock 分類 ----------
-async def classify_intent(text: str) -> str:
-    user_prompt = _CLASSIFY_PROMPT.format(text=text.replace('"', '\\"'))
-    logger.info(f"[classify_intent] 準備分類文字：{text}")
-
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 10, # 稍微增加 token 數以防萬一
-        "temperature": 0,
-        "messages": [
-            {"role": "user", "content": user_prompt}
-        ]
-    }
-
-    @retry_sync(retries=2, delay=0.5) # 加入重試
-    def _invoke():
-        try:
-            resp = BEDROCK.invoke_model(
-                modelId=MODEL_ID,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body).encode("utf-8")
-            )
-            data = json.loads(resp["body"].read())
-            logger.debug(f"[classify_intent] Bedrock 原始回應: {data}") # Debug Log
-            content = data.get("content", []) # 確保是 list
-            if isinstance(content, list) and content:
-                result_text = content[0].get("text", "").strip().upper()
-                # 再次檢查是否在允許的意圖內
-                valid_intents = {"START", "STOP", "INTERRUPT", "COMMAND"}
-                if result_text in valid_intents:
-                    logger.info(f"[classify_intent] Bedrock 分類結果：{result_text}")
-                    return result_text
-                else:
-                    logger.warning(f"[classify_intent] Bedrock 回應 '{result_text}' 非預期意圖，歸類為 COMMAND")
-                    return "COMMAND" # 如果回傳怪東西，預設為 COMMAND
-            else:
-                logger.warning(f"[classify_intent] Bedrock 回應格式錯誤或無內容，歸類為 COMMAND")
-                return "COMMAND" # 或 IGNORE，視需求調整
-        except Exception as e:
-            logger.error(f"[classify_intent] Bedrock invoke 失敗：{e}")
-            raise # 讓 retry 機制處理
-
-    try:
-        # 使用 asyncio.to_thread 執行同步函數
-        intent = await asyncio.to_thread(_invoke)
-        return intent
-    except Exception as e:
-        logger.error(f"[classify_intent] Bedrock 分類重試後仍然失敗：{e}")
-        return "IGNORE" # 多次失敗後回傳 IGNORE
-# -----------------------------------
-
-
 # --- Transcript Handler ---
 class MyTranscriptHandler(TranscriptResultStreamHandler):
-    # 不再需要 classify_intent 方法，移到外面作為獨立函數
-
     async def handle_transcript_event(self, transcript_event: TranscriptEvent):
         for result in transcript_event.transcript.results:
             if not result.is_partial:
                 text = result.alternatives[0].transcript.strip()
                 if text:
-                    logger.info(f"[TranscribeHandler] 轉出文字：{text}")
-                    # ⭐ 修改：不再直接呼叫 cancellable_socket_handle_text
-                    # 改為呼叫新的意圖處理函數
-                    await handle_intent_from_text(text)
+                    logger.info(f"[process_audio_file] 轉出文字：{text}")
+                    await cancellable_socket_handle_text(text)
 
-# --- HTML 模板 (維持不變) ---
 HTML = '''
 <!doctype html>
 <html lang="zh-TW">
@@ -184,7 +97,6 @@ HTML = '''
       color: #66fcf1;
       font-weight: bold;
       text-align: center;
-      min-height: 30px; /* 避免文字變換時跳動 */
     }
     #chat_log {
       width: 100%;
@@ -249,7 +161,9 @@ HTML = '''
 <div id="click_to_start">🔈 點一下開始</div>
 
 <div id="left">
-  <img id="expression" src="/static/animations/idle.gif" /> <div id="status">⏳ 系統待機中，請說啟動詞...</div> <div id="volume_bar"><div id="volume_fill"></div></div>
+  <img id="expression" src="/static/animations/wakeup.svg" />
+  <div id="status">🎤 等待開始錄音...</div>
+  <div id="volume_bar"><div id="volume_fill"></div></div>
   <audio id="player" controls></audio>
 </div>
 
@@ -277,13 +191,12 @@ let recordingStartTime = null;
 let silenceStart = null;
 let weakNoiseStart = null;
 let backgroundVolumes = [];
-let hasRecordedOnce = false;
-let currentSystemStatus = "⏳ 系統待機中，請說啟動詞..."; // 新增：追蹤系統狀態
+let hasRecordedOnce = false; 
 
 const baseThreshold = 0.08;             // 基本啟動門檻
 let dynamicThreshold = baseThreshold;    // 動態啟動門檻
 const silenceThreshold = 0.02;           // 判定無聲
-const silenceDelay = 1500;               // 錄音中無聲多久停止錄音（毫秒） - 稍微縮短
+const silenceDelay = 2000;               // 錄音中無聲多久停止錄音（毫秒）
 const maxRecordingTime = 12000;           // 錄音最大時長（毫秒）
 const weakNoiseIgnoreTime = 3000;         // 小聲雜訊超過多久忽略（毫秒）
 
@@ -315,7 +228,7 @@ async function prepareMicrophone() {
   });
 
   mediaRecorder.addEventListener('stop', async () => {
-    hasRecordedOnce = true; // 標記已錄音過
+    hasRecordedOnce = true;
     if (audioChunks.length > 0) {
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
       audioChunks = [];
@@ -323,19 +236,15 @@ async function prepareMicrophone() {
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64Audio = reader.result.split(',')[1];
-        // ⭐ 送出前顯示處理中狀態
-        status.innerText = '🧠 正在分析語音...';
-        expr.src = '/static/animations/thinking.gif';
         socket.emit('audio_blob', base64Audio);
+        status.innerText = '📨 上傳音訊中...';
       };
       reader.readAsDataURL(audioBlob);
-    } else {
-      // 如果沒有錄到聲音，則直接重新監聽
-      setTimeout(startListening, 100); // 短暫延遲避免過於頻繁
     }
+    setTimeout(startListening, 500);
   });
 
-  startListening(); // 啟動監聽
+  startListening();
 }
 
 function startListening() {
@@ -345,23 +254,19 @@ function startListening() {
   weakNoiseStart = null;
   backgroundVolumes = [];
   audioChunks = [];
-
-  // ⭐ 根據 currentSystemStatus 決定初始動畫和文字
-  status.innerText = currentSystemStatus;
-  if (currentSystemStatus.includes("待機")) {
-     expr.src = '/static/animations/idle.gif';
-  } else if (currentSystemStatus.includes("啟動")) {
-     expr.src = '/static/animations/wakeup.svg'; // 或 listening.gif
+  status.innerText = '👂 正在靜音監聽中...';
+  
+  // ⭐ 重點：第一次用 wakeup.svg，以後用 thinking.gif
+  if (!hasRecordedOnce) {
+    expr.src = '/static/animations/wakeup.svg';
   } else {
-     expr.src = '/static/animations/thinking.gif'; // 預設 thinking
+    expr.src = '/static/animations/thinking.gif';
   }
 
-  monitorVolume(); // 開始監控音量
+  monitorVolume();
 }
 
 function monitorVolume() {
-  if (!stream || !analyser) return; // 防禦性檢查
-
   const dataArray = new Uint8Array(analyser.fftSize);
   analyser.getByteTimeDomainData(dataArray);
 
@@ -383,15 +288,11 @@ function monitorVolume() {
     backgroundVolumes.push(volume);
     if (backgroundVolumes.length > 100) backgroundVolumes.shift();
 
-    if (backgroundVolumes.length > 10) { // 收集足夠樣本後再計算
-        const avgBackground = backgroundVolumes.reduce((a, b) => a + b, 0) / backgroundVolumes.length;
-        if (avgBackground > 0.05) {
-          dynamicThreshold = Math.min(0.15, baseThreshold + (avgBackground - 0.05) * 1.5); // 稍微提高動態門檻影響力
-        } else {
-          dynamicThreshold = baseThreshold;
-        }
+    const avgBackground = backgroundVolumes.reduce((a, b) => a + b, 0) / backgroundVolumes.length;
+    if (avgBackground > 0.05) {
+      dynamicThreshold = Math.min(0.15, baseThreshold + (avgBackground - 0.05));
     } else {
-        dynamicThreshold = baseThreshold; // 樣本不足時用基礎門檻
+      dynamicThreshold = baseThreshold;
     }
   }
 
@@ -400,9 +301,9 @@ function monitorVolume() {
     if (volume > silenceThreshold && volume < dynamicThreshold) {
       if (!weakNoiseStart) weakNoiseStart = now;
       if (now - weakNoiseStart > weakNoiseIgnoreTime) {
-        // console.log('💤 小聲雜訊超過3秒，忽略');
+        console.log('💤 小聲雜訊超過3秒，忽略');
         weakNoiseStart = null;
-        backgroundVolumes = []; // 重置背景音量計算
+        backgroundVolumes = [];
       }
     } else {
       weakNoiseStart = null;
@@ -411,528 +312,318 @@ function monitorVolume() {
 
   // --- 錄音邏輯 ---
   if (!isRecording) {
-    // 只有音量大於動態門檻，且不是剛忽略的小聲雜訊時才啟動
-    if (volume > dynamicThreshold && weakNoiseStart === null) {
+    if (volume > dynamicThreshold) {
       console.log('🎙️ 偵測到說話，開始錄音！');
-      try {
-        if (mediaRecorder.state === 'inactive') {
-            mediaRecorder.start();
-            recordingStartTime = now;
-            silenceStart = null;
-            isRecording = true;
-            status.innerText = '🎤 錄音中...';
-            expr.src = '/static/animations/listening.gif'; // 使用 listening 動畫
-        }
-      } catch (e) {
-        console.error("無法啟動錄音:", e);
-        // 可能需要重新初始化麥克風
-        prepareMicrophone();
-        return; // 停止這次的 monitor
-      }
+      mediaRecorder.start();
+      recordingStartTime = now;
+      silenceStart = null;
+      isRecording = true;
+      status.innerText = '🎤 錄音中...';
+      expr.src = '/static/animations/thinking.gif';
     }
-  } else { // 正在錄音中
+  } else {
     if (volume > silenceThreshold) {
-      silenceStart = null; // 有聲音，重置靜音計時器
-    } else { // 低於靜音門檻
-      if (!silenceStart) silenceStart = now; // 開始計時靜音
+      silenceStart = null;
+    } else {
+      if (!silenceStart) silenceStart = now;
       if (now - silenceStart > silenceDelay) {
-        console.log(`🛑 靜音超過 ${silenceDelay / 1000} 秒，停止錄音`);
-        try {
-          if (mediaRecorder.state === 'recording') {
-            mediaRecorder.stop(); // 停止錄音會觸發 'stop' 事件
-          }
-        } catch (e) {
-            console.error("無法停止錄音:", e);
-            // 即使出錯，也要嘗試回到監聽狀態
-            setTimeout(startListening, 100);
-        }
-        return; // 停止這次的 monitor
+        console.log('🛑 錄音中偵測到靜音超過2秒，停止錄音');
+        mediaRecorder.stop();
+        return;
       }
     }
-    // 檢查是否超過最大錄音時間
     if (now - recordingStartTime > maxRecordingTime) {
-      console.log(`⏰ 錄音超過 ${maxRecordingTime / 1000} 秒，強制停止`);
-       try {
-          if (mediaRecorder.state === 'recording') {
-            mediaRecorder.stop(); // 停止錄音會觸發 'stop' 事件
-          }
-       } catch (e) {
-           console.error("無法停止錄音 (超時):", e);
-           setTimeout(startListening, 100);
-       }
-      return; // 停止這次的 monitor
+      console.log('⏰ 錄音超過12秒，強制停止');
+      mediaRecorder.stop();
+      return;
     }
   }
 
-  requestAnimationFrame(monitorVolume); // 持續監控
+  requestAnimationFrame(monitorVolume);
 }
 
 // --- 處理 server 回傳訊息 ---
 socket.on('expression', (path) => {
-  console.log("Received expression:", path);
   expr.src = path;
 });
 
 socket.on('audio_url', (url) => {
-  console.log("Received audio URL:", url);
   expr.src = '/static/animations/speaking.gif';
   player.pause();
   player.src = url;
   player.load();
   player.play().catch(err => console.error("❌ 播放失敗", err));
   player.onended = () => {
-    // ⭐ 播放完畢後，根據 currentSystemStatus 決定回到哪個狀態
-    status.innerText = currentSystemStatus;
-    if (currentSystemStatus.includes("待機")) {
-       expr.src = '/static/animations/idle.gif';
-    } else if (currentSystemStatus.includes("啟動")) {
-       expr.src = '/static/animations/wakeup.svg'; // 或 listening.gif
-    } else {
-       expr.src = '/static/animations/thinking.gif';
-    }
-
-    // 刪除播放完的檔案
+    expr.src = '/static/animations/idle.gif';
     if (player.src.includes("/history_result/")) {
       const filename = player.src.split("/history_result/")[1];
       socket.emit('delete_audio', filename);
     }
-    // ⭐ 播放完畢後，自動重新開始監聽
-    setTimeout(startListening, 500);
   };
-  player.onerror = (e) => {
-    console.error("音訊播放錯誤:", e);
-    // 即使播放錯誤，也要回到監聽狀態
-     status.innerText = currentSystemStatus;
-     if (currentSystemStatus.includes("待機")) {
-       expr.src = '/static/animations/idle.gif';
-    } else if (currentSystemStatus.includes("啟動")) {
-       expr.src = '/static/animations/wakeup.svg'; // 或 listening.gif
-    } else {
-       expr.src = '/static/animations/thinking.gif';
-    }
-    setTimeout(startListening, 500);
-  };
+
 });
 
 socket.on('status', (msg) => {
-  console.log("Received status:", msg);
-  currentSystemStatus = msg; // ⭐ 更新前端追蹤的狀態
   status.innerText = msg;
-  // 可以根據狀態文字包含的關鍵字來改變表情，但由後端直接發 expression 事件更可靠
 });
 
 socket.on('user_query', (text) => {
-  console.log("Received user query:", text);
   latestUserQuery = text;
 });
 
 socket.on('text_response', (text) => {
-  console.log("Received text response:", text);
   const entry = document.createElement('div');
   entry.className = 'chat_entry';
   entry.innerHTML = `
-    <div class="user_query">🧑 ${latestUserQuery || '...'}</div>
+    <div class="user_query">🧑 ${latestUserQuery || ''}</div>
     <div class="bot_response">🤖 ${text}</div>
   `;
   chatLog.appendChild(entry);
-  // 捲動到底部
-  // 使用 setTimeout 確保 DOM 更新完成後再捲動
-  setTimeout(() => {
-    chatLog.scrollTop = chatLog.scrollHeight;
-  }, 0);
-  latestUserQuery = null; // 清除上次的 query
+  chatLog.scrollTop = chatLog.scrollHeight;
 });
 </script>
 
+
+
 </body>
 </html>
-'''
 
+'''
 @socketio.on('delete_audio')
 def delete_audio(filename):
     try:
-        # 安全地組合路徑
-        base_dir = Path('history_result').resolve() # 獲取絕對路徑
-        path = base_dir / filename
-        # 確保檔案在預期目錄下，防止路徑遍歷攻擊
-        if path.is_file() and path.parent == base_dir:
+        path = os.path.join('history_result', filename)
+        if os.path.exists(path):
             os.remove(path)
             logger.info(f"[delete_audio] 已刪除檔案：{path}")
-        else:
-            logger.warning(f"[delete_audio] 嘗試刪除無效路徑或不在允許目錄的檔案：{filename}")
     except Exception as e:
-        logger.error(f"[delete_audio] 刪除檔案 '{filename}' 失敗：{e}")
-
+        logger.error(f"[delete_audio] 刪除檔案失敗：{e}")
+        
+# --- 音訊處理 ---
 # --- 音訊處理 ---
 @socketio.on('audio_blob')
 def handle_audio_blob(base64_audio):
-    logger.info("[handle_audio_blob] 收到音訊 blob，準備轉換...")
-    # 前端已在送出前切換 thinking.gif
+    # 增加日誌記錄，標識每次調用
+    request_id = f"req_{time.monotonic_ns()}" # 創建一個簡單的請求 ID
+    logger.info(f"[{request_id}][handle_audio_blob] 收到 audio_blob 事件")
+
+    # 檢查收到的數據類型和初步內容
+    if not isinstance(base64_audio, str):
+        logger.error(f"[{request_id}][handle_audio_blob] 錯誤：收到的 base64_audio 不是字串，類型為 {type(base64_audio)}")
+        socketio.emit('status', '❌ 錯誤：音訊數據格式不對')
+        return
+    logger.info(f"[{request_id}][handle_audio_blob] 收到 Base64 字串，前 50 字元: {base64_audio[:50]}...")
+    logger.info(f"[{request_id}][handle_audio_blob] Base64 字串總長度: {len(base64_audio)}")
+
+    # 前端已切換 thinking.gif
+
+    tmp_file_path = None # 初始化確保 finally 可以檢查
 
     try:
-        audio_data = base64.b64decode(base64_audio)
+        # === 步驟 1: Base64 解碼 ===
+        logger.info(f"[{request_id}][handle_audio_blob] 嘗試 Base64 解碼...")
+        try:
+            audio_data = base64.b64decode(base64_audio)
+            logger.info(f"[{request_id}][handle_audio_blob] Base64 解碼成功，得到 {len(audio_data)} bytes 的音訊數據")
+        except base64.binascii.Error as b64e:
+            logger.error(f"[{request_id}][handle_audio_blob] Base64 解碼失敗: {b64e}")
+            socketio.emit('status', '❌ 無效的音訊數據 (Base64)')
+            return # 解碼失敗，無法繼續
+        except Exception as decode_e:
+            logger.error(f"[{request_id}][handle_audio_blob] Base64 解碼時發生未知錯誤: {decode_e}", exc_info=True)
+            socketio.emit('status', '❌ 音訊數據解碼錯誤')
+            return
 
-        # 使用 .opus 或 .webm，因為前端錄製的是 webm
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_file:
-            tmp_file.write(audio_data)
-            tmp_file_path = tmp_file.name
-            logger.info(f"[handle_audio_blob] 音訊暫存於：{tmp_file_path}")
+        # === 步驟 2: 創建並寫入臨時檔案 ===
+        # 確保目標目錄存在且可寫
+        temp_dir = Path("./temp_audio") # 建議使用一個專用臨時目錄
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[{request_id}][handle_audio_blob] 確保臨時目錄存在: {temp_dir.resolve()}")
+        except OSError as dir_err:
+             logger.error(f"[{request_id}][handle_audio_blob] 無法創建或訪問臨時目錄 {temp_dir.resolve()}: {dir_err}")
+             socketio.emit('status', '❌ 伺服器檔案系統錯誤 (Dir)')
+             return
 
-        # 使用 asyncio.run_coroutine_threadsafe 在異步事件循環中執行協程
-        loop = asyncio.get_event_loop()
-        asyncio.run_coroutine_threadsafe(process_audio_file(tmp_file_path), loop)
+        logger.info(f"[{request_id}][handle_audio_blob] 嘗試在 {temp_dir} 創建臨時 .webm 檔案...")
+        try:
+            # 使用 delete=False 確保文件在 with 語句結束後不被刪除，以便 process_audio_file 訪問
+            # 指定 dir=temp_dir
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False, dir=temp_dir) as tmp_file:
+                tmp_file.write(audio_data)
+                tmp_file_path = tmp_file.name # 獲取完整路徑
+            logger.info(f"[{request_id}][handle_audio_blob] 成功將音訊數據寫入臨時檔案: {tmp_file_path}")
+            # 檢查文件是否真的創建了
+            if not Path(tmp_file_path).exists():
+                 logger.error(f"[{request_id}][handle_audio_blob] 寫入後檢查：臨時檔案 {tmp_file_path} 不存在！")
+                 socketio.emit('status', '❌ 伺服器檔案系統錯誤 (Write)')
+                 return
 
-    except Exception as e:
-        logger.error(f"[handle_audio_blob] 音訊處理失敗：{e}")
-        socketio.emit('status', '❌ 音訊處理失敗')
-        # 可能需要觸發前端重新監聽
+        except IOError as io_err:
+            logger.error(f"[{request_id}][handle_audio_blob] 寫入臨時檔案時發生 IO 錯誤: {io_err}", exc_info=True)
+            socketio.emit('status', '❌ 伺服器檔案系統錯誤 (IO)')
+            return
+        except Exception as tmp_err:
+            logger.error(f"[{request_id}][handle_audio_blob] 創建或寫入臨時檔案時發生未知錯誤: {tmp_err}", exc_info=True)
+            socketio.emit('status', '❌ 伺服器檔案系統錯誤 (Tmp)')
+            return
 
+        # === 步驟 3: 提交異步任務 ===
+        logger.info(f"[{request_id}][handle_audio_blob] 準備將 process_audio_file 提交到事件循環...")
+        try:
+            loop = asyncio.get_event_loop()
+            logger.info(f"[{request_id}][handle_audio_blob] 獲取到事件循環: {loop}")
+            if loop.is_running():
+                logger.info(f"[{request_id}][handle_audio_blob] 事件循環正在運行，提交任務...")
+                # 確保傳遞的是有效的 tmp_file_path
+                if tmp_file_path and Path(tmp_file_path).exists():
+                    future = asyncio.run_coroutine_threadsafe(process_audio_file(tmp_file_path), loop)
+                    logger.info(f"[{request_id}][handle_audio_blob] 任務已提交，Future: {future}")
+                    # 可以選擇性地添加回調來檢查任務是否成功提交或執行
+                    # future.add_done_callback(lambda f: logger.info(f"[{request_id}] Async task completed. Result/Exception: {f.result() if not f.cancelled() else 'Cancelled'}"))
+                else:
+                    logger.error(f"[{request_id}][handle_audio_blob] 錯誤：臨時檔案路徑無效或檔案不存在，無法提交任務。Path: {tmp_file_path}")
+                    socketio.emit('status', '❌ 伺服器內部錯誤 (File Path)')
+                    # 需要手動清理已創建但未處理的檔案 (如果 tmp_file_path 有值)
+                    if tmp_file_path and Path(tmp_file_path).exists():
+                         try: os.remove(tmp_file_path)
+                         except OSError as e: logger.warning(f"[{request_id}] 手動清理 {tmp_file_path} 失敗: {e}")
+            else:
+                logger.warning(f"[{request_id}][handle_audio_blob] 事件循環未運行！無法處理音訊。")
+                socketio.emit('status', '❌ 伺服器內部錯誤 (Loop)')
+                # 同樣需要手動清理
+                if tmp_file_path and Path(tmp_file_path).exists():
+                     try: os.remove(tmp_file_path)
+                     except OSError as e: logger.warning(f"[{request_id}] 手動清理 {tmp_file_path} 失敗: {e}")
+
+        except Exception as submit_err:
+            logger.error(f"[{request_id}][handle_audio_blob] 提交異步任務時發生錯誤: {submit_err}", exc_info=True)
+            socketio.emit('status', '❌ 伺服器內部錯誤 (Async Submit)')
+            # 清理
+            if tmp_file_path and Path(tmp_file_path).exists():
+                try: os.remove(tmp_file_path)
+                except OSError as e: logger.warning(f"[{request_id}] 清理 {tmp_file_path} 失敗: {e}")
+
+
+    except Exception as outer_err:
+        # 捕獲 handle_audio_blob 函數自身的其他未預期錯誤
+        logger.error(f"[{request_id}][handle_audio_blob] 處理 audio_blob 事件時發生頂層錯誤: {outer_err}", exc_info=True)
+        socketio.emit('status', '❌ 伺服器發生嚴重錯誤')
+        # 清理 (如果 tmp_file_path 已賦值)
+        if tmp_file_path and Path(tmp_file_path).exists():
+             try: os.remove(tmp_file_path)
+             except OSError as e: logger.warning(f"[{request_id}] 清理 {tmp_file_path} 失敗: {e}")
+
+    # 注意：由於 process_audio_file 是異步運行的，handle_audio_blob 函數會在這裡結束，
+    # 不會等待 process_audio_file 完成。process_audio_file 內部的 finally 塊負責清理它創建的 .wav 檔案。
+    # 而這裡創建的 .webm 檔案，如果成功提交給 process_audio_file，則由 process_audio_file 的 finally 負責清理。
+    # 如果提交失敗或在此函數中出錯，則需要在上面的錯誤處理中手動清理 .webm 檔案。
 
 async def process_audio_file(file_path):
-    global is_active # 讓此函數知道目前的啟動狀態
-    pcm_path = "" # 初始化
     try:
-        # 轉換為 Transcribe 要求的 PCM WAV 格式
         pcm_path = file_path.replace('.webm', '.wav')
-        # 使用 Path 物件處理路徑
-        input_path = Path(file_path)
-        output_path = Path(pcm_path)
-        # 執行 ffmpeg 命令
-        command = [
-            "ffmpeg", "-y",       # 覆蓋輸出文件
-            "-i", str(input_path), # 輸入文件
-            "-ac", "1",           # 單聲道
-            "-ar", "16000",       # 16kHz 採樣率
-            "-f", "wav",          # 輸出格式為 WAV
-            str(output_path)      # 輸出文件
-        ]
-        logger.info(f"[process_audio_file] 執行 FFmpeg: {' '.join(command)}")
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
+        subprocess.run(f"ffmpeg -y -i {file_path} -ac 1 -ar 16000 -f wav {pcm_path}", shell=True, check=True)
 
-        if process.returncode != 0:
-            logger.error(f"[process_audio_file] FFmpeg 轉換失敗: {stderr.decode()}")
-            socketio.emit('status', '❌ 音訊轉檔失敗')
-            # 可以在這裡觸發前端重新監聽
-            # socketio.emit('reset_listening') # 假設前端有這個事件
-            return
-        else:
-            logger.info("[process_audio_file] FFmpeg 轉換成功")
-
-        # 讀取轉換後的 PCM 數據
-        with open(output_path, 'rb') as f:
+        with open(pcm_path, 'rb') as f:
             pcm_data = f.read()
 
-        client = TranscribeStreamingClient(region=REGION)
-        # 開始串流轉錄
+        client = TranscribeStreamingClient(region="us-west-2")
         stream = await client.start_stream_transcription(
             language_code="zh-TW",
             media_sample_rate_hz=16000,
             media_encoding="pcm",
         )
 
-        # 將音訊數據分塊發送
-        async def write_chunks():
-            chunk_size = 8000  # 調整塊大小，例如 8KB
-            try:
-                for i in range(0, len(pcm_data), chunk_size):
-                    chunk = pcm_data[i:i+chunk_size]
-                    await stream.input_stream.send_audio_event(audio_chunk=chunk)
-                    await asyncio.sleep(0.1) # 短暫延遲避免發送過快
-                await stream.input_stream.end_stream()
-                logger.info("[process_audio_file] 音訊串流發送完畢")
-            except Exception as e:
-                logger.error(f"[process_audio_file] 發送音訊串流時出錯: {e}")
-                # 可能需要關閉 stream 或通知錯誤
+        chunk_size = 6400  
+        for i in range(0, len(pcm_data), chunk_size):
+            chunk = pcm_data[i:i+chunk_size]
+            await stream.input_stream.send_audio_event(audio_chunk=chunk)
+            await asyncio.sleep(0.1)
 
-        # 處理轉錄結果
-        async def read_results():
-            handler = MyTranscriptHandler(stream.output_stream)
-            try:
-                await handler.handle_events() # handle_events 會處理所有事件直到結束
-                logger.info("[process_audio_file] Transcribe 結果處理完畢")
-            except Exception as e:
-                logger.error(f"[process_audio_file] 處理 Transcribe 結果時出錯: {e}")
-                 # 可以在這裡觸發前端重新監聽
+        await stream.input_stream.end_stream()
 
-        # 並發執行寫入和讀取
-        await asyncio.gather(write_chunks(), read_results())
+        handler = MyTranscriptHandler(stream.output_stream)
+        async for event in stream.output_stream:
+            await handler.handle_transcript_event(event)
 
     except Exception as e:
-        logger.error(f"[process_audio_file] 整體音訊處理失敗：{e}")
-        socketio.emit('status', f'❌ 語音辨識失敗: {e}')
-        # 出錯後確保前端能回到某個穩定狀態
-        current_status = "🟢 已啟動，請說指令..." if is_active else "⏳ 系統待機中，請說啟動詞..."
-        socketio.emit('status', current_status)
-        expression = '/static/animations/wakeup.svg' if is_active else '/static/animations/idle.gif'
-        socketio.emit('expression', expression)
-    finally:
-        # 清理暫存檔案
-        try:
-            if Path(file_path).exists():
-                os.remove(file_path)
-                logger.info(f"[process_audio_file] 已刪除暫存檔：{file_path}")
-            if Path(pcm_path).exists():
-                os.remove(pcm_path)
-                logger.info(f"[process_audio_file] 已刪除 WAV 檔：{pcm_path}")
-        except Exception as e:
-            logger.warning(f"[process_audio_file] 清理暫存檔失敗: {e}")
+        logger.error(f"[process_audio_file] 音訊處理失敗：{e}")
 
-
-# --- 新增：根據文字處理意圖 ---
-async def handle_intent_from_text(text: str):
-    global is_active, current_task
-
-    socketio.emit('status', f"💬 收到: \"{text}\"，分析意圖...")
-    socketio.emit('expression', '/static/animations/thinking.gif') # 分析意圖時也用 thinking
-    socketio.emit('user_query', text) # 先顯示用戶說的話
-
-    intent = await classify_intent(text)
-    logger.info(f"[handle_intent_from_text] 文字: '{text}', 意圖: {intent}")
-
-    with is_active_lock: # 確保狀態修改的原子性
-        if intent == "START":
-            if not is_active:
-                is_active = True
-                logger.info("[handle_intent_from_text] 系統啟動")
-                # 取消可能存在的舊任務 (雖然理論上 inactive 時不該有)
-                with current_task_lock:
-                    if current_task and not current_task.done():
-                        logger.info("[handle_intent_from_text] (START) 取消舊任務...")
-                        current_task.cancel()
-                        current_task = None
-                socketio.emit('status', '🟢 已啟動，請說指令...')
-                socketio.emit('expression', '/static/animations/wakeup.svg') # 啟動動畫
-            else:
-                logger.info("[handle_intent_from_text] 系統已啟動，忽略 START 指令")
-                socketio.emit('status', '🟢 已啟動，請說指令...') # 維持啟動狀態提示
-                socketio.emit('expression', '/static/animations/wakeup.svg')
-
-        elif intent == "STOP":
-            if is_active:
-                is_active = False
-                logger.info("[handle_intent_from_text] 系統關閉")
-                with current_task_lock:
-                    if current_task and not current_task.done():
-                        logger.info("[handle_intent_from_text] (STOP) 取消進行中任務...")
-                        current_task.cancel()
-                        current_task = None
-                socketio.emit('status', '⏳ 系統待機中，請說啟動詞...')
-                socketio.emit('expression', '/static/animations/idle.gif') # 待機動畫
-            else:
-                logger.info("[handle_intent_from_text] 系統已關閉，忽略 STOP 指令")
-                socketio.emit('status', '⏳ 系統待機中，請說啟動詞...') # 維持待機狀態提示
-                socketio.emit('expression', '/static/animations/idle.gif')
-
-        elif intent == "INTERRUPT":
-            if is_active:
-                logger.info("[handle_intent_from_text] 收到打斷指令")
-                with current_task_lock:
-                    if current_task and not current_task.done():
-                        logger.info("[handle_intent_from_text] (INTERRUPT) 取消進行中任務...")
-                        current_task.cancel()
-                        current_task = None
-                        socketio.emit('status', '🟡 已中斷，請說新指令...')
-                        socketio.emit('expression', '/static/animations/listening.gif') # 或 thinking
-                    else:
-                        logger.info("[handle_intent_from_text] (INTERRUPT) 無任務可中斷，等待新指令...")
-                        socketio.emit('status', '🟢 已啟動，請說指令...') # 回到等待指令狀態
-                        socketio.emit('expression', '/static/animations/wakeup.svg')
-            else:
-                logger.info("[handle_intent_from_text] 系統未啟動，忽略 INTERRUPT 指令")
-                socketio.emit('status', '⏳ 系統待機中，請說啟動詞...') # 維持待機狀態提示
-                socketio.emit('expression', '/static/animations/idle.gif')
-
-        elif intent == "COMMAND":
-            if is_active:
-                logger.info("[handle_intent_from_text] 執行指令型任務...")
-                socketio.emit('status', f'🚀 收到指令: "{text}"，執行中...')
-                socketio.emit('expression', '/static/animations/thinking.gif')
-                # 執行原本的任務處理邏輯
-                await cancellable_socket_handle_text(text)
-            else:
-                logger.info("[handle_intent_from_text] 系統未啟動，忽略 COMMAND 指令")
-                socketio.emit('status', '⏳ 系統待機中，請說啟動詞...')
-                socketio.emit('expression', '/static/animations/idle.gif')
-
-        elif intent == "IGNORE":
-            logger.info("[handle_intent_from_text] 忽略無法分類或無效的指令")
-            current_status = "🟢 已啟動，請說指令..." if is_active else "⏳ 系統待機中，請說啟動詞..."
-            socketio.emit('status', current_status) # 回復當前狀態提示
-            expression = '/static/animations/wakeup.svg' if is_active else '/static/animations/idle.gif'
-            socketio.emit('expression', expression) # 回復對應表情
-
-        # ⭐ 無論如何，最後都讓前端重新監聽 (除非是 STOP)
-        #    (這部分邏輯移到前端的 audio_url onended 和 onerror 處理)
-        # if intent != "STOP":
-        #     socketio.emit('reset_listening') # 通知前端可以開始下一次監聽
-
-# --- 任務處理 (handle_text 函數基本不變) ---
+# --- 任務處理 ---
 async def handle_text(text: str):
-    global is_active # 需要知道狀態，雖然主要邏輯在外層處理了
     try:
-        # 這個函數現在只處理確認過的 COMMAND
-        logger.info(f"[handle_text] 開始處理命令：{text}")
-        # socketio.emit('status', f"🚀 執行中：{text}") # 狀態已在 handle_intent_from_text 更新
-        # socketio.emit('user_query', text) # 已在 handle_intent_from_text 發送
+        logger.info(f"[handle_text] 收到完整文字：{text}")
+        socketio.emit('status', f"📝 偵測到文字：{text}")
+        socketio.emit('user_query', text)
 
-        # --- 任務分類 (可選，如果 Bedrock 分類已足夠，這裡可以簡化) ---
-        # 如果希望保留原有的 TaskClassifier，可以繼續使用
         task_classifier = TaskClassifier()
-        # 注意 retry_sync 是同步的，在 async 函數中使用需要 to_thread
-        # task_type, _ = await asyncio.to_thread(retry_sync(retries=3, delay=1)(task_classifier.classify_task), text)
-        # 或者，簡化處理，直接假設是聊天或查詢 (如果 Bedrock 分類夠準)
-        # 這裡我們假設仍然使用 TaskClassifier
-        classify_func = retry_sync(retries=3, delay=1)(task_classifier.classify_task)
-        task_type, _ = await asyncio.to_thread(classify_func, text)
-
+        task_type, _ = retry_sync(retries=3, delay=1)(task_classifier.classify_task)(text)
         logger.info(f"[handle_text] 任務分類結果：{task_type}")
 
-        # socketio.emit('expression', '/static/animations/thinking.gif') # 已在外層設定
+        socketio.emit('expression', '/static/animations/thinking.gif')
 
         audio_path = None
         generated_text = None
         ts = time.strftime('%Y%m%d_%H%M%S')
-        output_dir = Path("./history_result")
-        output_dir.mkdir(exist_ok=True) # 確保目錄存在
 
-        # 使用 await asyncio.to_thread 來執行同步的 retry_sync 包裹的函數
         if task_type == "聊天":
             chat_model = Chatbot(model_id="anthropic.claude-3-haiku-20240307-v1:0")
-            chat_func = retry_sync(retries=3, delay=1)(chat_model.chat)
-            generated_text = await asyncio.to_thread(chat_func, text)
-            if generated_text:
-                audio_path = output_dir / f"output_chat_{ts}.mp3"
-                tts_func = retry_sync(retries=3, delay=1)(PollyTTS().synthesize)
-                await asyncio.to_thread(tts_func, generated_text, str(audio_path))
+            generated_text = retry_sync(retries=3, delay=1)(chat_model.chat)(text)
+            audio_path = f"./history_result/output_chat_{ts}.mp3"
+            retry_sync(retries=3, delay=1)(PollyTTS().synthesize)(generated_text, audio_path)
 
         elif task_type == "查詢":
             web_searcher = WebSearcher(max_results=3, search_depth="advanced", use_top_only=True)
             conversational_model = ConversationalModel(model_id="anthropic.claude-3-haiku-20240307-v1:0")
             pipeline = RAGPipeline(web_searcher=web_searcher, model=conversational_model)
-            answer_func = retry_sync(retries=3, delay=1)(pipeline.answer)
-            generated_text = await asyncio.to_thread(answer_func, text)
-            if generated_text:
-                audio_path = output_dir / f"output_search_{ts}.mp3"
-                tts_func = retry_sync(retries=3, delay=1)(PollyTTS().synthesize)
-                await asyncio.to_thread(tts_func, generated_text, str(audio_path))
+            generated_text = retry_sync(retries=3, delay=1)(pipeline.answer)(text)
+            audio_path = f"./history_result/output_search_{ts}.mp3"
+            retry_sync(retries=3, delay=1)(PollyTTS().synthesize)(generated_text, audio_path)
 
         elif task_type == "行動":
             action_decomposer = ActionDecomposer()
-            decompose_func = retry_sync(retries=3, delay=1)(action_decomposer.decompose)
-            generated_text = await asyncio.to_thread(decompose_func, text)
-            # 行動類型通常沒有語音回覆，但可以根據需求添加
-            if generated_text:
-                 logger.info(f"[handle_text] 行動分解結果: {generated_text}")
-                 # 可以選擇性地念出分解結果
-                 # audio_path = output_dir / f"output_action_{ts}.mp3"
-                 # tts_func = retry_sync(retries=3, delay=1)(PollyTTS().synthesize)
-                 # await asyncio.to_thread(tts_func, f"好的，收到行動指令。 {generated_text}", str(audio_path)) # 例如
-
-        else:
-            # 未知任務類型，可以給一個通用回覆
-             logger.warning(f"[handle_text] 未知的任務類型: {task_type}")
-             generated_text = "抱歉，我不太理解這個指令。"
-             audio_path = output_dir / f"output_unknown_{ts}.mp3"
-             tts_func = retry_sync(retries=3, delay=1)(PollyTTS().synthesize)
-             await asyncio.to_thread(tts_func, generated_text, str(audio_path))
-
+            generated_text = retry_sync(retries=3, delay=1)(action_decomposer.decompose)(text)
 
         if generated_text:
-            socketio.emit('text_response', generated_text) # 發送文字回覆
+            socketio.emit('text_response', generated_text)
 
-        if audio_path and audio_path.exists():
+        if audio_path and Path(audio_path).exists():
             logger.info(f"[handle_text] 音檔生成完成：{audio_path}")
-            # 使用 with app.app_context() 來獲取 url_for
+            # ⭐ 在這裡補上 app context
             with app.app_context():
-                # 使用 Path 物件獲取檔名
-                audio_url = url_for('get_audio', filename=audio_path.name, _external=False) # 使用相對路徑
-                logger.info(f"[handle_text] 生成 Audio URL: {audio_url}")
+                audio_url = url_for('get_audio', filename=os.path.basename(audio_path))
             socketio.emit('expression', '/static/animations/speaking.gif')
-            socketio.emit('audio_url', audio_url) # 發送音檔 URL 給前端播放
-        else:
-            # 如果沒有音檔生成（例如只有文字回覆或行動指令），也要恢復狀態
-            logger.info("[handle_text] 無音檔生成，任務處理完畢")
-            current_status = "🟢 已啟動，請說指令..." if is_active else "⏳ 系統待機中，請說啟動詞..."
-            socketio.emit('status', current_status)
-            expression = '/static/animations/wakeup.svg' if is_active else '/static/animations/idle.gif'
-            socketio.emit('expression', expression)
-            # ⭐ 同樣，讓前端在適當時候 (例如 text_response 收到後) 重新監聽
+            socketio.emit('audio_url', audio_url)
 
-        # socketio.emit('status', '✅ 已完成。') # 狀態由 audio_url 的 onended 或 text_response 處理更佳
+        socketio.emit('status', '✅ 已完成。')
 
     except asyncio.CancelledError:
         logger.info("[handle_text] 任務被取消")
-        socketio.emit('status', '🟡 任務已中斷')
-        socketio.emit('expression', '/static/animations/listening.gif') # 或 idle/wakeup
-        raise # 重新拋出異常，讓上層知道被取消了
+        raise
     except Exception as e:
-        logger.error(f"[handle_text] 處理命令時發生錯誤：{e}", exc_info=True) # 打印詳細錯誤
-        socketio.emit('status', f'❌ 執行命令時出錯: {e}')
-        # 出錯後恢復狀態
-        current_status = "🟢 已啟動，請說指令..." if is_active else "⏳ 系統待機中，請說啟動詞..."
-        socketio.emit('status', current_status)
-        expression = '/static/animations/wakeup.svg' if is_active else '/static/animations/idle.gif'
-        socketio.emit('expression', expression)
+        logger.error(f"[handle_text] 發生錯誤：{e}")
 
 
 async def cancellable_socket_handle_text(text: str):
     global current_task
     with current_task_lock:
         if current_task and not current_task.done():
-            logger.info("[cancellable_socket_handle_text] 收到新命令，取消上一個任務...")
+            logger.info("[cancellable_socket_handle_text] 取消上一個任務...")
             current_task.cancel()
-            # 等待上一個任務確實被取消 (可選，但有助於資源釋放)
-            # try:
-            #     await asyncio.wait_for(current_task, timeout=1.0)
-            # except (asyncio.CancelledError, asyncio.TimeoutError):
-            #     pass # 忽略取消或超時錯誤
 
         loop = asyncio.get_running_loop()
-        logger.info(f"[cancellable_socket_handle_text] 創建新任務來處理命令: {text}")
         current_task = loop.create_task(handle_text(text))
-        # 可以在任務完成時添加回調，用於清理或記錄
-        # current_task.add_done_callback(lambda t: logger.info(f"任務 {t.get_name()} 完成"))
-
 
 # --- 路由 ---
 @app.route('/')
 def index():
-    # 確保在請求上下文中渲染模板
     return render_template_string(HTML)
 
-@app.route('/history_result/<path:filename>') # 使用 path converter 處理可能包含子目錄的檔名
+@app.route('/history_result/<filename>')
 def get_audio(filename):
-    logger.debug(f"請求音檔: {filename}")
-    # 使用 safe_join 確保安全，並從絕對路徑提供服務
-    directory = Path('history_result').resolve()
-    try:
-        # 檢查請求的檔案是否在允許的目錄下
-        requested_path = (directory / filename).resolve()
-        if requested_path.is_file() and requested_path.parent == directory:
-             logger.debug(f"從目錄 {directory} 提供檔案 {filename}")
-             return send_from_directory(directory, filename)
-        else:
-             logger.warning(f"拒絕存取不在允許目錄的檔案: {filename}")
-             return "Forbidden", 403
-    except FileNotFoundError:
-        logger.error(f"請求的音檔不存在: {filename}")
-        return "Not Found", 404
-    except Exception as e:
-        logger.error(f"提供音檔時發生錯誤 ({filename}): {e}")
-        return "Internal Server Error", 500
+    return send_from_directory('history_result', filename)
 
 # --- 主程式 ---
 if __name__ == '__main__':
-    # 確保 history_result 目錄存在
     os.makedirs('history_result', exist_ok=True)
-    logger.info("啟動 SocketIO Server on 0.0.0.0:5000")
-    # 建議不要在生產環境中使用 allow_unsafe_werkzeug=True
-    # 考慮使用更健壯的 WSGI 伺服器如 gunicorn 或 uvicorn 配合 eventlet 或 gevent
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
-    # debug=True, use_reloader=False 可以在開發時幫助調試，但生產環境應設為 False
-    # use_reloader=False 避免重啟時 asyncio 事件循環出問題
+    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
