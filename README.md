@@ -4,7 +4,7 @@
 
 
 ## Live展示:
-[影片連結](url)
+[影片連結](https://drive.google.com/file/d/1u5VAm6FSwULOWFbmKkqFlZ-U8vnPxfAd/view)
 
 ## 專案架構: 
 ![image](https://github.com/SoundAssistant/sound_assistant_aws/blob/main/arch.png)
