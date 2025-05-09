@@ -32,7 +32,7 @@ pip install -r requirements.txt
 ```
 **Run**<br>
 ```
-streamlit run app.py
+python app.py
 ```
 After running this command, the server will listen on port `8501`.
 
